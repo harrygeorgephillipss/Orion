@@ -69,7 +69,10 @@ def main() -> None:
         out.append(line)
     out += [f"{k}={v}" for k, v in values.items()]
     env.write_text("\n".join(out) + "\n")
-    os.chmod(env, 0o600)
+    try:
+        os.chmod(env, 0o600)
+    except OSError:  # e.g. a Windows folder mounted into Docker
+        pass
     print(f"Wrote {env} (permissions 600). Next:")
     print("  docker compose -f deployment/docker-compose.yml --env-file .env up -d --build")
     print("Then open the server, sign in as", email, "and follow docs/USER_GUIDE.md.")

@@ -18,6 +18,7 @@ The 20 documents requested in the master brief, and where each stands.
 | 12 | Aura AI configuration | [AURA.md](AURA.md) | ✅ |
 | 13 | AI security and permissions | [AURA.md](AURA.md), [SECURITY.md](SECURITY.md) | ✅ |
 | 13b | Aura voice engine (Google speech) | [VOICE.md](VOICE.md) | ✅ code + automated tests; real audio not tested |
+| 21 | Windows laptop server | [WINDOWS_SERVER.md](WINDOWS_SERVER.md) | ✅ written; not yet run on Windows |
 | 14 | Android build instructions | [ANDROID.md](ANDROID.md) | ✅ |
 | 15 | Testing procedures | [TESTING.md](TESTING.md), [VALIDATION.md](VALIDATION.md) | ✅ |
 | 16 | Troubleshooting guide | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | ✅ |

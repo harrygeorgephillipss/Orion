@@ -1,0 +1,5 @@
+# Shell scripts and broker files must keep Unix line endings (they run inside Linux containers)
+*.sh text eol=lf
+deployment/mosquitto/* text eol=lf
+*.ps1 text eol=crlf
+*.cmd text eol=crlf

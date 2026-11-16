@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     mqtt_host: str = "localhost"
     mqtt_port: int = 1883
     mqtt_tls: bool = False
+    lan_host: str = ""  # this server's address on the home network, offered to gateways in the setup code
     mqtt_username: str = ""
     mqtt_password: str = ""
     mqtt_topic_root: str = "orion"

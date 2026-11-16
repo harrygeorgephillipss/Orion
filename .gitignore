@@ -34,3 +34,6 @@ android/.gradle/
 .vscode/
 deployment/mosquitto/passwd
 deployment/mosquitto/certs/
+
+# Windows home server
+orion-start.log

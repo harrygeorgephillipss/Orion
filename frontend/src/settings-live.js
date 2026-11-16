@@ -90,10 +90,10 @@
     if (!out) return;
     out.closest('details').open = true;
     const st = data.setup, host = serverHost();
-    const local = /^(localhost|127\.|::1)/.test(host);
+    const local = /^(localhost|127\.|::1)/.test(host) || /\.ts\.net$/.test(host);  // on the server itself, or a public tunnel name the gateway can't use
     out.innerHTML = `<div class="note stack" role="status" style="gap:8px"><b>${esc(verb)} ${esc(st.gateway)}.</b>
       <span class="hint">${data.broker_account_created ? 'Its broker account is ready.' : 'Add its broker account (docs/BACKEND.md) if you run Mosquitto yourself.'} The setup code contains its password — it is shown only now.</span>
-      <div class="fgrid"><label class="fld"><span>Server address the gateway uses</span><input data-sc="host" value="${esc(local ? '' : host)}" placeholder="e.g. 192.168.1.10" maxlength="63"><small>${local ? 'This page is opened on the server itself — enter the server’s address on your home network.' : 'The address of this ORION server on your home network.'}</small></label>
+      <div class="fgrid"><label class="fld"><span>Server address the gateway uses</span><input data-sc="host" value="${esc(st.lan_host || (local ? '' : host))}" placeholder="e.g. 192.168.1.10" maxlength="63"><small>${local ? 'This page is opened on the server itself — enter the server’s address on your home network.' : 'The address of this ORION server on your home network.'}</small></label>
         <label class="fld"><span>Broker port</span><input data-sc="port" type="number" value="${esc(st.mqtt_port)}" min="1" max="65535"></label></div>
       <label class="fld"><span>Setup code</span><textarea data-secret data-sc="code" rows="3" readonly class="mono" style="width:100%"></textarea></label>
       <div class="row-btns"><button class="btn sm" data-la="copy" type="button">Copy setup code</button></div>
