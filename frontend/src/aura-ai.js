@@ -103,6 +103,91 @@
     };
   }
 
+
+  /* ---------- Server voice engine (Phase 4b): speech-to-text and text-to-speech through the ORION server ----------
+     Providers (Google Cloud by default) and their keys live on the server. The page records audio (MediaRecorder),
+     uploads it for transcription, and plays server-generated speech sentence by sentence as the answer streams.
+     Any failure falls back to the device's own voice, and text chat always keeps working. */
+  const SV = { cfg: null, app: null, orig: null, queue: Promise.resolve(), gen: 0, audio: null, prevDict: null };
+  const SV_LANGS = ['en', 'ml', 'hi'];
+  const svLang = (code) => (SV_LANGS.includes(code) ? code : 'en');
+  function serverDictation(app) {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof window.MediaRecorder === 'undefined') return null;
+    const L = { partial: [], final: [], state: [] };
+    const fire = (k, v) => L[k].forEach((f) => { try { f(v); } catch (e) { console.error(e); } });
+    const types = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm'];
+    const mime = types.find((m) => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) || '';
+    let on = false, rec = null, stream = null, chunks = [], vad = null, maxT = null, ctx = null;
+    const d = {
+      kind: 'server', active: () => on,
+      onPartial: (f) => L.partial.push(f), onFinal: (f) => L.final.push(f), onState: (f) => L.state.push(f),
+      async start(opts) {
+        try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+        catch (e) { throw { code: e && (e.name === 'NotAllowedError' || e.name === 'SecurityError') ? 'not_granted' : 'unavailable' }; }
+        const lang = svLang(opts && opts.language);
+        chunks = [];
+        rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+        rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+        rec.onstop = async () => {
+          clearTimeout(maxT); clearInterval(vad); try { if (ctx) ctx.close(); } catch (e) { /* closed */ }
+          if (stream) stream.getTracks().forEach((t) => t.stop());
+          on = false;
+          const blob = new Blob(chunks, { type: (rec.mimeType || mime || 'audio/webm').split(';')[0] });
+          fire('state', { state: 'processing' });
+          const r = await app.source.voiceTranscribe(blob, lang);
+          if (r.ok && r.text) fire('final', { text: r.text + ' ' });
+          else if (!r.ok && r.code !== 'no_speech' && ORION.app) ORION.app.toast('Voice input failed: ' + r.error + ' — you can type instead.', 'bad');
+          fire('state', { state: 'idle', reason: r.ok || r.code === 'no_speech' ? 'stopped' : 'error' });
+        };
+        rec.start(250); on = true; fire('state', { state: 'listening' });
+        maxT = setTimeout(() => d.stop(), 15000);
+        try {  // end of speech: ~1.2 s of quiet after speaking
+          ctx = new (window.AudioContext || window.webkitAudioContext)();
+          const an = ctx.createAnalyser(); ctx.createMediaStreamSource(stream).connect(an);
+          const buf = new Uint8Array(an.fftSize); let spoke = false, quiet = Date.now();
+          vad = setInterval(() => {
+            an.getByteTimeDomainData(buf); let s = 0; for (const v of buf) s += (v - 128) * (v - 128);
+            if (Math.sqrt(s / buf.length) > 8) { spoke = true; quiet = Date.now(); } else if (spoke && Date.now() - quiet > 1200) d.stop();
+          }, 100);
+        } catch (e) { /* no level meter: tap the orb to finish, or 15 s */ }
+      },
+      async stop() { if (rec && rec.state !== 'inactive') rec.stop(); },
+    };
+    return d;
+  }
+  function serverSay(text, code, rate) {
+    const gen = SV.gen, app = SV.app;
+    const lang = svLang(code);
+    if (!SV_LANGS.includes(code) && code !== 'auto' && SV.orig) return SV.orig.deviceSay(text, code, rate);  // other languages: device voice
+    const voices = ORION.util.store.get('orion.aura.svoice', {}) || {};
+    const audio = app.source.voiceSpeak({ text: String(text).slice(0, 1500), language: lang, voice: voices[lang] || '', rate: Math.min(2, Math.max(0.5, rate || 1)) });  // fetched now (progressive)
+    const play = () => audio.then((r) => new Promise((resolve) => {
+      if (gen !== SV.gen) return resolve();
+      if (!r.ok) { cap.lastSpeechError = r.code; return (SV.orig ? SV.orig.deviceSay(text, code, rate) : Promise.resolve()).then(resolve); }
+      const url = URL.createObjectURL(r.blob), a = new Audio(url);
+      SV.audio = a;
+      const done = () => { URL.revokeObjectURL(url); if (SV.audio === a) SV.audio = null; resolve(); };
+      a.onended = done; a.onerror = done;
+      Promise.resolve(a.play()).catch(() => { cap.lastSpeechError = 'play_blocked'; done(); });
+    }));
+    SV.queue = SV.queue.then(play, play);
+    return SV.queue;
+  }
+  function useServerVoice(app, cfg) {
+    SV.cfg = cfg; SV.app = app;
+    if (!cfg) return;
+    if (cfg.stt && cfg.stt.available) { const d = serverDictation(app); if (d) { SV.prevDict = cap.dict; cap.dict = d; } }
+    if (cfg.tts && cfg.tts.available && !SV.orig) {
+      const A2 = ORION.auraAI;
+      SV.orig = { deviceSay: A2.deviceSay, speakBrowser: A2.speakBrowser, stopBrowser: A2.stopBrowser };
+      A2.deviceSay = (t, code, rate) => serverSay(t, code, rate);
+      A2.speakBrowser = (t, code, onEnd, rate) => { serverSay(t, code, rate).then(() => onEnd && onEnd()); return true; };
+      A2.stopBrowser = () => { SV.gen++; SV.queue = Promise.resolve(); if (SV.audio) { try { SV.audio.pause(); } catch (e) { /* gone */ } SV.audio = null; } SV.orig.stopBrowser(); };
+      cap.browserTts = true; cap.serverTts = true;
+    }
+    emit();
+  }
+
   /* Device (browser) voice — used only where Claude's own voice isn't offered in this view. */
   const BCP = { en: 'en-IN', ml: 'ml-IN', hi: 'hi-IN', bn: 'bn-IN', ta: 'ta-IN', te: 'te-IN', kn: 'kn-IN', mr: 'mr-IN', gu: 'gu-IN', pa: 'pa-IN', or: 'or-IN', ur: 'ur-IN', as: 'as-IN' };
   const browserVoices = () => { try { return window.speechSynthesis ? window.speechSynthesis.getVoices() : []; } catch (e) { return []; } };
@@ -390,5 +475,5 @@
 
     /* Device voice usable alongside Claude's mic (Claude's own voice can't speak while its mic is on). */
   const deviceVoiceFor = (code) => { if (typeof window.speechSynthesis === 'undefined') return null; return browserVoiceFor(code); };
-  ORION.auraAI = { serverOn, notify: emit, deviceSay, deviceVoiceFor, PLATFORM, LANGS, byCode, cap, init, onChange: (f) => subs.push(f), canSpeak, speechAvailable, speakBrowser, stopBrowser, browserVoiceFor, detectLang, context, ask, split, plainForSpeech, ERR };
+  ORION.auraAI = { serverOn, notify: emit, useServerVoice, serverVoice: SV, deviceSay, deviceVoiceFor, PLATFORM, LANGS, byCode, cap, init, onChange: (f) => subs.push(f), canSpeak, speechAvailable, speakBrowser, stopBrowser, browserVoiceFor, detectLang, context, ask, split, plainForSpeech, ERR };
 })();

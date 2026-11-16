@@ -74,6 +74,9 @@
     async _loadAura() {
       const r = await this.api('/aura/status');
       this.aura = r.ok ? r.data : { available: false, reason: r.error };
+      const v = await this.api('/aura/voice/config');
+      this.voiceCfg = v.ok ? v.data : null;
+      if (this.voiceCfg && ORION.auraAI && ORION.auraAI.useServerVoice) ORION.auraAI.useServerVoice(ORION.app, this.voiceCfg);
       if (ORION.auraAI && ORION.auraAI.notify) ORION.auraAI.notify();
     }
 
@@ -254,6 +257,27 @@
       if (!r.ok) return { ok: false, error: r.error };
       if (r.data.status === 'failed') return { ok: false, error: r.data.history[r.data.history.length - 1].note, command: r.data };
       return { ok: true, command: r.data };
+    }
+    /* Server voice: upload a recording for transcription / fetch speech audio. Errors come back as {ok:false}. */
+    async voiceTranscribe(blob, lang) {
+      try {
+        const go = () => fetch(this.base + '/api/v1/aura/voice/transcribe?language=' + encodeURIComponent(lang), { method: 'POST', credentials: 'include', headers: { 'Content-Type': blob.type || 'audio/webm', Authorization: 'Bearer ' + this.token }, body: blob });
+        let r = await go();
+        if (r.status === 401 && await this._refresh()) r = await go();
+        const j = await r.json().catch(() => ({}));
+        if (r.ok) return { ok: true, text: j.text || '' };
+        const d = j.detail || {};
+        return { ok: false, code: d.code || String(r.status), error: d.message || 'speech service error' };
+      } catch (e) { return { ok: false, code: 'network', error: 'connection lost' }; }
+    }
+    async voiceSpeak(body) {
+      try {
+        const go = () => fetch(this.base + '/api/v1/aura/voice/speak', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.token }, body: JSON.stringify(body) });
+        let r = await go();
+        if (r.status === 401 && await this._refresh()) r = await go();
+        if (!r.ok) { const j = await r.json().catch(() => ({})); return { ok: false, code: (j.detail && j.detail.code) || String(r.status) }; }
+        return { ok: true, blob: await r.blob() };
+      } catch (e) { return { ok: false, code: 'network' }; }
     }
     async putConfig(key, value) { return this.api('/config/' + key, { method: 'PUT', body: value }); }
     setScenario() { /* simulation only */ }

@@ -8,7 +8,7 @@
   const A = () => ORION.app;
   const ui = () => A().ui;
 
-  let ctl = null, dictBase = '', dictWired = false, ttsWired = false;
+  let ctl = null, dictBase = '', wiredDict = null, ttsWired = false;
   const el = (id) => document.getElementById(id);
   const lang = () => AI.byCode(ui().auraLang);
   const aiOn = () => (!!AI.cap.sample && !AI.cap.aiBlocked) || AI.serverOn(A());
@@ -288,12 +288,14 @@
 
   /* ---------- voice in ---------- */
   function wireDict() {
-    const d = AI.cap.dict; if (dictWired || !d) return; dictWired = true;
+    const d = AI.cap.dict; if (!d || wiredDict === d) return; wiredDict = d;  // re-wire when the engine changes (e.g. server voice)
     d.onPartial(({ text }) => { if (V.open) { if (vMuted()) return; if (text) { clearIdle(); clearHold(); } if (text && V.shown && !V.heard) V.shown = ''; V.partial = text; armSilence(); return vRender(); } const i = el('au-in'); if (i) { i.value = (dictBase + (text ? (dictBase ? ' ' : '') + text : '')).trimStart(); i.classList.add('provisional'); } });
     d.onFinal(({ text }) => { if (V.open) { if (vMuted()) return; clearIdle(); clearHold(); V.partialWaited = false; V.shown = ''; V.heard = (V.heard + text).trimStart(); V.partial = ''; armSilence(); return vRender(); } dictBase = (dictBase + text).trimStart(); const i = el('au-in'); if (i) { i.value = dictBase; i.classList.remove('provisional'); } });
     d.onState(({ state, reason }) => {
       const m = el('au-mic'); if (m) { m.classList.toggle('on', state !== 'idle'); m.setAttribute('aria-pressed', String(state !== 'idle')); m.innerHTML = I(state === 'idle' ? 'mic' : 'stop'); }
       const w = el('au-wrap'); if (w) w.classList.toggle('listening', state === 'listening' || state === 'starting');
+      if (state === 'processing') { V.transcribing = true; if (V.open) vRender(); return; }
+      V.transcribing = false;
       if (V.open) {
         if (state === 'starting') { V.micStarting = true; vRender(); }
         if (state === 'listening') { V.micStarting = false; V.micOn = true; if (V.state === 'listening' && !V.heard && !V.partial) armIdle(); vRender(); }
@@ -351,6 +353,7 @@
         : AI.cap.browserTts ? '<p class="hint">Using this device’s built-in voice. Claude’s voices are offered in Chrome and the Claude desktop app.</p>' : '<p class="hint">No voice is available in this browser — replies are shown as text.</p>'}
       ${AI.cap.tts ? `<div class="set-row"><div><b>Keep listening after each reply</b><span class="hint">Off: Aura always speaks in the voice you picked, and you tap once to reply. On: the mic stays open, so Aura has to use your device’s voice instead (Claude’s voice can’t speak while its mic is on).</span></div>
         <div class="seg">${[[false, 'Off'], [true, 'On']].map(([v, l]) => `<button class="seg-b${u.auraHandsFree === v ? ' on' : ''}" data-action="aura-handsfree" data-v="${v}">${l}</button>`).join('')}</div></div>` : ''}
+      ${AI.serverVoice.cfg && AI.serverVoice.cfg.tts && AI.serverVoice.cfg.tts.available ? (() => { const lc = ['en', 'ml', 'hi'].includes(u.auraLang) ? u.auraLang : 'en', sel = (U.store.get('orion.aura.svoice', {}) || {})[lc] || ''; return `<div class="set-row"><div><b>Aura's voice (${esc(lc.toUpperCase())})</b><span class="hint">Natural voices from the ORION server's speech service.</span></div><div class="seg">${(AI.serverVoice.cfg.voices[lc] || []).map((v) => `<button class="seg-b${sel === v.name ? ' on' : ''}" data-action="aura-svoice" data-l="${lc}" data-v="${esc(v.name)}">${esc(v.label)}</button>`).join('')}</div></div>`; })() : ''}
       <div class="set-row"><div><b>Speaking speed</b></div><div class="seg">${[[0.9, 'Slower'], [1, 'Normal'], [1.15, 'Faster']].map(([v, l]) => `<button class="seg-b${u.auraRate === v ? ' on' : ''}" data-action="aura-rate" data-v="${v}">${l}</button>`).join('')}</div></div>
       <div class="set-row muted-row"><div><b>ElevenLabs voices</b><span class="hint">Planned for Phase 2. ElevenLabs needs a secret API key, which must stay on ORION’s own server — never inside this page — so it arrives with the backend.</span></div><span class="chip-s s-off">Phase 2</span></div>
       <h3>Answers</h3>
@@ -461,7 +464,7 @@
   function vRender() {
     const o = el('voiceOverlay'); if (!o) return;
     o.dataset.state = V.state;
-    o.querySelector('.vo-label').textContent = V.state === 'listening' && V.micStarting ? 'Starting the mic…' : V.state === 'ready' && V.reply && !V.kb ? 'Tap to reply' : VLABEL[V.state];
+    o.querySelector('.vo-label').textContent = V.transcribing ? 'Understanding…' : V.state === 'listening' && V.micStarting ? 'Starting the mic…' : V.state === 'ready' && V.reply && !V.kb ? 'Tap to reply' : VLABEL[V.state];
     const hint = o.querySelector('.vo-hint');
     if (hint) hint.textContent = V.state === 'speaking' ? 'Tap to interrupt'
       : V.kb && V.state === 'await' ? 'Speak using the 🎤 on your keyboard'
@@ -531,6 +534,7 @@
       return;
     }
     const d = AI.cap.dict;
+    if (V.state === 'listening' && d.active() && d.kind === 'server') { d.stop(); return; }  // tap = "I'm done", then transcribe
     if (V.state === 'listening' && d.active()) {
       if ((V.heard + V.partial).trim()) vSubmit();      // “I’m done” — answer now
       else { armIdle(); vRender(); }                    // already listening — just keep listening
@@ -665,6 +669,7 @@
     'voice-type': () => { V.typing = !V.typing; vRender(); const i = el('vo-in'); if (i && V.typing) i.focus(); },
     'aura-copyreport': () => { const t = report(); try { navigator.clipboard.writeText(t).then(() => A().toast('Report copied — paste it into your Claude chat.'), () => A().toast('Copy isn’t allowed here — take a screenshot of the report instead.')); } catch (e) { A().toast('Copy isn’t allowed here — take a screenshot of the report instead.'); } },
     'aura-voice': (t) => { previewVoice(t.dataset.v); A().sheet('lang', langSheet); },
+    'aura-svoice': (t) => { const m = U.store.get('orion.aura.svoice', {}) || {}; m[t.dataset.l] = t.dataset.v; U.store.set('orion.aura.svoice', m); A().sheet('lang', langSheet); },
     'aura-rate': (t) => { ui().auraRate = +t.dataset.v; U.store.set('orion.aura.rate', ui().auraRate); if (AI.cap.tts && AI.cap.tts.setRate) AI.cap.tts.setRate(ui().auraRate).catch(() => {}); A().sheet('lang', langSheet); },
     'aura-setlang': (t) => { ui().auraLang = t.dataset.l; U.store.set('orion.aura.lang', t.dataset.l); A().sheet('lang', langSheet); renderChrome(); },
     'aura-tier': (t) => { ui().auraTier = t.dataset.v; U.store.set('orion.aura.tier', t.dataset.v); A().sheet('lang', langSheet); },

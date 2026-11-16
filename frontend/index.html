@@ -1554,6 +1554,9 @@ ORION.setupCode = {
     async _loadAura() {
       const r = await this.api('/aura/status');
       this.aura = r.ok ? r.data : { available: false, reason: r.error };
+      const v = await this.api('/aura/voice/config');
+      this.voiceCfg = v.ok ? v.data : null;
+      if (this.voiceCfg && ORION.auraAI && ORION.auraAI.useServerVoice) ORION.auraAI.useServerVoice(ORION.app, this.voiceCfg);
       if (ORION.auraAI && ORION.auraAI.notify) ORION.auraAI.notify();
     }
 
@@ -1734,6 +1737,27 @@ ORION.setupCode = {
       if (!r.ok) return { ok: false, error: r.error };
       if (r.data.status === 'failed') return { ok: false, error: r.data.history[r.data.history.length - 1].note, command: r.data };
       return { ok: true, command: r.data };
+    }
+    /* Server voice: upload a recording for transcription / fetch speech audio. Errors come back as {ok:false}. */
+    async voiceTranscribe(blob, lang) {
+      try {
+        const go = () => fetch(this.base + '/api/v1/aura/voice/transcribe?language=' + encodeURIComponent(lang), { method: 'POST', credentials: 'include', headers: { 'Content-Type': blob.type || 'audio/webm', Authorization: 'Bearer ' + this.token }, body: blob });
+        let r = await go();
+        if (r.status === 401 && await this._refresh()) r = await go();
+        const j = await r.json().catch(() => ({}));
+        if (r.ok) return { ok: true, text: j.text || '' };
+        const d = j.detail || {};
+        return { ok: false, code: d.code || String(r.status), error: d.message || 'speech service error' };
+      } catch (e) { return { ok: false, code: 'network', error: 'connection lost' }; }
+    }
+    async voiceSpeak(body) {
+      try {
+        const go = () => fetch(this.base + '/api/v1/aura/voice/speak', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.token }, body: JSON.stringify(body) });
+        let r = await go();
+        if (r.status === 401 && await this._refresh()) r = await go();
+        if (!r.ok) { const j = await r.json().catch(() => ({})); return { ok: false, code: (j.detail && j.detail.code) || String(r.status) }; }
+        return { ok: true, blob: await r.blob() };
+      } catch (e) { return { ok: false, code: 'network' }; }
     }
     async putConfig(key, value) { return this.api('/config/' + key, { method: 'PUT', body: value }); }
     setScenario() { /* simulation only */ }
@@ -2365,6 +2389,91 @@ ORION.setupCode = {
     };
   }
 
+
+  /* ---------- Server voice engine (Phase 4b): speech-to-text and text-to-speech through the ORION server ----------
+     Providers (Google Cloud by default) and their keys live on the server. The page records audio (MediaRecorder),
+     uploads it for transcription, and plays server-generated speech sentence by sentence as the answer streams.
+     Any failure falls back to the device's own voice, and text chat always keeps working. */
+  const SV = { cfg: null, app: null, orig: null, queue: Promise.resolve(), gen: 0, audio: null, prevDict: null };
+  const SV_LANGS = ['en', 'ml', 'hi'];
+  const svLang = (code) => (SV_LANGS.includes(code) ? code : 'en');
+  function serverDictation(app) {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof window.MediaRecorder === 'undefined') return null;
+    const L = { partial: [], final: [], state: [] };
+    const fire = (k, v) => L[k].forEach((f) => { try { f(v); } catch (e) { console.error(e); } });
+    const types = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm'];
+    const mime = types.find((m) => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) || '';
+    let on = false, rec = null, stream = null, chunks = [], vad = null, maxT = null, ctx = null;
+    const d = {
+      kind: 'server', active: () => on,
+      onPartial: (f) => L.partial.push(f), onFinal: (f) => L.final.push(f), onState: (f) => L.state.push(f),
+      async start(opts) {
+        try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+        catch (e) { throw { code: e && (e.name === 'NotAllowedError' || e.name === 'SecurityError') ? 'not_granted' : 'unavailable' }; }
+        const lang = svLang(opts && opts.language);
+        chunks = [];
+        rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+        rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+        rec.onstop = async () => {
+          clearTimeout(maxT); clearInterval(vad); try { if (ctx) ctx.close(); } catch (e) { /* closed */ }
+          if (stream) stream.getTracks().forEach((t) => t.stop());
+          on = false;
+          const blob = new Blob(chunks, { type: (rec.mimeType || mime || 'audio/webm').split(';')[0] });
+          fire('state', { state: 'processing' });
+          const r = await app.source.voiceTranscribe(blob, lang);
+          if (r.ok && r.text) fire('final', { text: r.text + ' ' });
+          else if (!r.ok && r.code !== 'no_speech' && ORION.app) ORION.app.toast('Voice input failed: ' + r.error + ' — you can type instead.', 'bad');
+          fire('state', { state: 'idle', reason: r.ok || r.code === 'no_speech' ? 'stopped' : 'error' });
+        };
+        rec.start(250); on = true; fire('state', { state: 'listening' });
+        maxT = setTimeout(() => d.stop(), 15000);
+        try {  // end of speech: ~1.2 s of quiet after speaking
+          ctx = new (window.AudioContext || window.webkitAudioContext)();
+          const an = ctx.createAnalyser(); ctx.createMediaStreamSource(stream).connect(an);
+          const buf = new Uint8Array(an.fftSize); let spoke = false, quiet = Date.now();
+          vad = setInterval(() => {
+            an.getByteTimeDomainData(buf); let s = 0; for (const v of buf) s += (v - 128) * (v - 128);
+            if (Math.sqrt(s / buf.length) > 8) { spoke = true; quiet = Date.now(); } else if (spoke && Date.now() - quiet > 1200) d.stop();
+          }, 100);
+        } catch (e) { /* no level meter: tap the orb to finish, or 15 s */ }
+      },
+      async stop() { if (rec && rec.state !== 'inactive') rec.stop(); },
+    };
+    return d;
+  }
+  function serverSay(text, code, rate) {
+    const gen = SV.gen, app = SV.app;
+    const lang = svLang(code);
+    if (!SV_LANGS.includes(code) && code !== 'auto' && SV.orig) return SV.orig.deviceSay(text, code, rate);  // other languages: device voice
+    const voices = ORION.util.store.get('orion.aura.svoice', {}) || {};
+    const audio = app.source.voiceSpeak({ text: String(text).slice(0, 1500), language: lang, voice: voices[lang] || '', rate: Math.min(2, Math.max(0.5, rate || 1)) });  // fetched now (progressive)
+    const play = () => audio.then((r) => new Promise((resolve) => {
+      if (gen !== SV.gen) return resolve();
+      if (!r.ok) { cap.lastSpeechError = r.code; return (SV.orig ? SV.orig.deviceSay(text, code, rate) : Promise.resolve()).then(resolve); }
+      const url = URL.createObjectURL(r.blob), a = new Audio(url);
+      SV.audio = a;
+      const done = () => { URL.revokeObjectURL(url); if (SV.audio === a) SV.audio = null; resolve(); };
+      a.onended = done; a.onerror = done;
+      Promise.resolve(a.play()).catch(() => { cap.lastSpeechError = 'play_blocked'; done(); });
+    }));
+    SV.queue = SV.queue.then(play, play);
+    return SV.queue;
+  }
+  function useServerVoice(app, cfg) {
+    SV.cfg = cfg; SV.app = app;
+    if (!cfg) return;
+    if (cfg.stt && cfg.stt.available) { const d = serverDictation(app); if (d) { SV.prevDict = cap.dict; cap.dict = d; } }
+    if (cfg.tts && cfg.tts.available && !SV.orig) {
+      const A2 = ORION.auraAI;
+      SV.orig = { deviceSay: A2.deviceSay, speakBrowser: A2.speakBrowser, stopBrowser: A2.stopBrowser };
+      A2.deviceSay = (t, code, rate) => serverSay(t, code, rate);
+      A2.speakBrowser = (t, code, onEnd, rate) => { serverSay(t, code, rate).then(() => onEnd && onEnd()); return true; };
+      A2.stopBrowser = () => { SV.gen++; SV.queue = Promise.resolve(); if (SV.audio) { try { SV.audio.pause(); } catch (e) { /* gone */ } SV.audio = null; } SV.orig.stopBrowser(); };
+      cap.browserTts = true; cap.serverTts = true;
+    }
+    emit();
+  }
+
   /* Device (browser) voice — used only where Claude's own voice isn't offered in this view. */
   const BCP = { en: 'en-IN', ml: 'ml-IN', hi: 'hi-IN', bn: 'bn-IN', ta: 'ta-IN', te: 'te-IN', kn: 'kn-IN', mr: 'mr-IN', gu: 'gu-IN', pa: 'pa-IN', or: 'or-IN', ur: 'ur-IN', as: 'as-IN' };
   const browserVoices = () => { try { return window.speechSynthesis ? window.speechSynthesis.getVoices() : []; } catch (e) { return []; } };
@@ -2652,7 +2761,7 @@ ORION.setupCode = {
 
     /* Device voice usable alongside Claude's mic (Claude's own voice can't speak while its mic is on). */
   const deviceVoiceFor = (code) => { if (typeof window.speechSynthesis === 'undefined') return null; return browserVoiceFor(code); };
-  ORION.auraAI = { serverOn, notify: emit, deviceSay, deviceVoiceFor, PLATFORM, LANGS, byCode, cap, init, onChange: (f) => subs.push(f), canSpeak, speechAvailable, speakBrowser, stopBrowser, browserVoiceFor, detectLang, context, ask, split, plainForSpeech, ERR };
+  ORION.auraAI = { serverOn, notify: emit, useServerVoice, serverVoice: SV, deviceSay, deviceVoiceFor, PLATFORM, LANGS, byCode, cap, init, onChange: (f) => subs.push(f), canSpeak, speechAvailable, speakBrowser, stopBrowser, browserVoiceFor, detectLang, context, ask, split, plainForSpeech, ERR };
 })();
 
 /* Aura chat — mounts either as the Aura page or as the side panel available on every page.
@@ -2665,7 +2774,7 @@ ORION.setupCode = {
   const A = () => ORION.app;
   const ui = () => A().ui;
 
-  let ctl = null, dictBase = '', dictWired = false, ttsWired = false;
+  let ctl = null, dictBase = '', wiredDict = null, ttsWired = false;
   const el = (id) => document.getElementById(id);
   const lang = () => AI.byCode(ui().auraLang);
   const aiOn = () => (!!AI.cap.sample && !AI.cap.aiBlocked) || AI.serverOn(A());
@@ -2945,12 +3054,14 @@ ORION.setupCode = {
 
   /* ---------- voice in ---------- */
   function wireDict() {
-    const d = AI.cap.dict; if (dictWired || !d) return; dictWired = true;
+    const d = AI.cap.dict; if (!d || wiredDict === d) return; wiredDict = d;  // re-wire when the engine changes (e.g. server voice)
     d.onPartial(({ text }) => { if (V.open) { if (vMuted()) return; if (text) { clearIdle(); clearHold(); } if (text && V.shown && !V.heard) V.shown = ''; V.partial = text; armSilence(); return vRender(); } const i = el('au-in'); if (i) { i.value = (dictBase + (text ? (dictBase ? ' ' : '') + text : '')).trimStart(); i.classList.add('provisional'); } });
     d.onFinal(({ text }) => { if (V.open) { if (vMuted()) return; clearIdle(); clearHold(); V.partialWaited = false; V.shown = ''; V.heard = (V.heard + text).trimStart(); V.partial = ''; armSilence(); return vRender(); } dictBase = (dictBase + text).trimStart(); const i = el('au-in'); if (i) { i.value = dictBase; i.classList.remove('provisional'); } });
     d.onState(({ state, reason }) => {
       const m = el('au-mic'); if (m) { m.classList.toggle('on', state !== 'idle'); m.setAttribute('aria-pressed', String(state !== 'idle')); m.innerHTML = I(state === 'idle' ? 'mic' : 'stop'); }
       const w = el('au-wrap'); if (w) w.classList.toggle('listening', state === 'listening' || state === 'starting');
+      if (state === 'processing') { V.transcribing = true; if (V.open) vRender(); return; }
+      V.transcribing = false;
       if (V.open) {
         if (state === 'starting') { V.micStarting = true; vRender(); }
         if (state === 'listening') { V.micStarting = false; V.micOn = true; if (V.state === 'listening' && !V.heard && !V.partial) armIdle(); vRender(); }
@@ -3008,6 +3119,7 @@ ORION.setupCode = {
         : AI.cap.browserTts ? '<p class="hint">Using this device’s built-in voice. Claude’s voices are offered in Chrome and the Claude desktop app.</p>' : '<p class="hint">No voice is available in this browser — replies are shown as text.</p>'}
       ${AI.cap.tts ? `<div class="set-row"><div><b>Keep listening after each reply</b><span class="hint">Off: Aura always speaks in the voice you picked, and you tap once to reply. On: the mic stays open, so Aura has to use your device’s voice instead (Claude’s voice can’t speak while its mic is on).</span></div>
         <div class="seg">${[[false, 'Off'], [true, 'On']].map(([v, l]) => `<button class="seg-b${u.auraHandsFree === v ? ' on' : ''}" data-action="aura-handsfree" data-v="${v}">${l}</button>`).join('')}</div></div>` : ''}
+      ${AI.serverVoice.cfg && AI.serverVoice.cfg.tts && AI.serverVoice.cfg.tts.available ? (() => { const lc = ['en', 'ml', 'hi'].includes(u.auraLang) ? u.auraLang : 'en', sel = (U.store.get('orion.aura.svoice', {}) || {})[lc] || ''; return `<div class="set-row"><div><b>Aura's voice (${esc(lc.toUpperCase())})</b><span class="hint">Natural voices from the ORION server's speech service.</span></div><div class="seg">${(AI.serverVoice.cfg.voices[lc] || []).map((v) => `<button class="seg-b${sel === v.name ? ' on' : ''}" data-action="aura-svoice" data-l="${lc}" data-v="${esc(v.name)}">${esc(v.label)}</button>`).join('')}</div></div>`; })() : ''}
       <div class="set-row"><div><b>Speaking speed</b></div><div class="seg">${[[0.9, 'Slower'], [1, 'Normal'], [1.15, 'Faster']].map(([v, l]) => `<button class="seg-b${u.auraRate === v ? ' on' : ''}" data-action="aura-rate" data-v="${v}">${l}</button>`).join('')}</div></div>
       <div class="set-row muted-row"><div><b>ElevenLabs voices</b><span class="hint">Planned for Phase 2. ElevenLabs needs a secret API key, which must stay on ORION’s own server — never inside this page — so it arrives with the backend.</span></div><span class="chip-s s-off">Phase 2</span></div>
       <h3>Answers</h3>
@@ -3118,7 +3230,7 @@ ORION.setupCode = {
   function vRender() {
     const o = el('voiceOverlay'); if (!o) return;
     o.dataset.state = V.state;
-    o.querySelector('.vo-label').textContent = V.state === 'listening' && V.micStarting ? 'Starting the mic…' : V.state === 'ready' && V.reply && !V.kb ? 'Tap to reply' : VLABEL[V.state];
+    o.querySelector('.vo-label').textContent = V.transcribing ? 'Understanding…' : V.state === 'listening' && V.micStarting ? 'Starting the mic…' : V.state === 'ready' && V.reply && !V.kb ? 'Tap to reply' : VLABEL[V.state];
     const hint = o.querySelector('.vo-hint');
     if (hint) hint.textContent = V.state === 'speaking' ? 'Tap to interrupt'
       : V.kb && V.state === 'await' ? 'Speak using the 🎤 on your keyboard'
@@ -3188,6 +3300,7 @@ ORION.setupCode = {
       return;
     }
     const d = AI.cap.dict;
+    if (V.state === 'listening' && d.active() && d.kind === 'server') { d.stop(); return; }  // tap = "I'm done", then transcribe
     if (V.state === 'listening' && d.active()) {
       if ((V.heard + V.partial).trim()) vSubmit();      // “I’m done” — answer now
       else { armIdle(); vRender(); }                    // already listening — just keep listening
@@ -3322,6 +3435,7 @@ ORION.setupCode = {
     'voice-type': () => { V.typing = !V.typing; vRender(); const i = el('vo-in'); if (i && V.typing) i.focus(); },
     'aura-copyreport': () => { const t = report(); try { navigator.clipboard.writeText(t).then(() => A().toast('Report copied — paste it into your Claude chat.'), () => A().toast('Copy isn’t allowed here — take a screenshot of the report instead.')); } catch (e) { A().toast('Copy isn’t allowed here — take a screenshot of the report instead.'); } },
     'aura-voice': (t) => { previewVoice(t.dataset.v); A().sheet('lang', langSheet); },
+    'aura-svoice': (t) => { const m = U.store.get('orion.aura.svoice', {}) || {}; m[t.dataset.l] = t.dataset.v; U.store.set('orion.aura.svoice', m); A().sheet('lang', langSheet); },
     'aura-rate': (t) => { ui().auraRate = +t.dataset.v; U.store.set('orion.aura.rate', ui().auraRate); if (AI.cap.tts && AI.cap.tts.setRate) AI.cap.tts.setRate(ui().auraRate).catch(() => {}); A().sheet('lang', langSheet); },
     'aura-setlang': (t) => { ui().auraLang = t.dataset.l; U.store.set('orion.aura.lang', t.dataset.l); A().sheet('lang', langSheet); renderChrome(); },
     'aura-tier': (t) => { ui().auraTier = t.dataset.v; U.store.set('orion.aura.tier', t.dataset.v); A().sheet('lang', langSheet); },
