@@ -1,0 +1,23 @@
+{
+  "name": "orion-android",
+  "private": true,
+  "version": "0.4.0",
+  "description": "ORION Android app: the ORION web app in a Capacitor shell with push, native speech and network handling",
+  "scripts": {
+    "web": "python3 ../frontend/build.py && mkdir -p www && cp ../frontend/index.html www/index.html",
+    "sync": "npm run web && npx cap sync android",
+    "build:debug": "npm run sync && cd android && ./gradlew assembleDebug"
+  },
+  "dependencies": {
+    "@capacitor-community/speech-recognition": "7.0.1",
+    "@capacitor-community/text-to-speech": "6.1.0",
+    "@capacitor/android": "7.6.10",
+    "@capacitor/core": "7.6.10",
+    "@capacitor/network": "7.0.4",
+    "@capacitor/preferences": "7.0.4",
+    "@capacitor/push-notifications": "7.0.7"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "7.6.10"
+  }
+}

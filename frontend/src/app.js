@@ -308,7 +308,8 @@
     window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (Math.abs(window.innerWidth - lastW) > 40 && ['home', 'history'].includes(app.route)) { lastW = window.innerWidth; app.mountView(); } }, 250); });
     // Served by an ORION server → live data by default; opened as a local file → simulation. The choice is remembered.
     const saved = U.store.get('orion.mode', null);
-    app.setSource(saved === 'demo' || saved === 'live' ? saved : (/^https?:$/.test(location.protocol) ? 'live' : 'demo'));
+    const isApp = ORION.native && ORION.native.isNative;
+    app.setSource(saved === 'demo' || saved === 'live' ? saved : (isApp || /^https?:$/.test(location.protocol) ? 'live' : 'demo'));
     route();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();

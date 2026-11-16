@@ -12,13 +12,14 @@ from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import func, select
 
 from . import mqtt
-from .api import aura, auth, data, devices, system, users, ws
+from .api import aura, auth, data, devices, push, system, users, ws
 from .audit import audit
 from .bus import bus
 from .config import get_settings
 from .db import sessionmaker
 from .models import Role, User
 from .security import hash_password, password_problems
+from .push import dispatcher
 from .services import commands, engine
 
 log = logging.getLogger("orion")
@@ -64,7 +65,7 @@ async def monitor() -> None:
 async def lifespan(app: FastAPI):
     st = get_settings()
     await bootstrap_owner()
-    tasks = [asyncio.create_task(monitor(), name="monitor")]
+    tasks = [asyncio.create_task(monitor(), name="monitor"), asyncio.create_task(dispatcher.run(), name="push")]
     if st.mqtt_enabled:
         tasks.append(asyncio.create_task(mqtt.run(), name="mqtt"))
     yield
@@ -97,7 +98,7 @@ def create_app() -> FastAPI:
         log.exception("unhandled error on %s", request.url.path)
         return JSONResponse({"detail": "Internal server error"}, status_code=500)
 
-    for r in (auth.router, users.router, devices.router, data.router, system.router, aura.router, ws.router):
+    for r in (auth.router, users.router, devices.router, data.router, system.router, aura.router, push.router, ws.router):
         app.include_router(r, prefix="/api/v1")
 
     # Serve the built single-file web app on the same origin (cookies + no CORS needed).

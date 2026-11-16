@@ -1,0 +1,10 @@
+{
+  "appId": "org.orion.homesafety",
+  "appName": "ORION",
+  "webDir": "www",
+  "server": { "androidScheme": "https" },
+  "android": { "allowMixedContent": false },
+  "plugins": {
+    "PushNotifications": { "presentationOptions": ["badge", "sound", "alert"] }
+  }
+}

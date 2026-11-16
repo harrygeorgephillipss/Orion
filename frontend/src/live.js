@@ -16,6 +16,7 @@
   function serverBase() {
     const saved = U.store.get(SERVER_KEY, '');
     if (saved) return String(saved).replace(/\/+$/, '');
+    if (ORION.native && ORION.native.isNative) return '';  // the app's own origin is not a server: the address must be set
     if (/^https?:$/.test(location.protocol)) return location.origin;
     return '';
   }
@@ -64,6 +65,11 @@
     async _afterAuth() {
       await Promise.all([this._loadConfig(), this.refetch(), this._loadAura()]);
       this._openWs();
+      if (ORION.native && ORION.native.isNative && !this._nativeWired) {
+        this._nativeWired = true;
+        ORION.native.watchNetwork(this);
+        ORION.native.registerPush(this).then((r) => { if (!r.ok && ORION.app) ORION.app.toast('Push alerts off: ' + r.error, 'bad'); });
+      }
     }
     async _loadAura() {
       const r = await this.api('/aura/status');
@@ -99,9 +105,14 @@
     /* ---------- auth ---------- */
     async _refresh() {
       try {
-        const r = await fetch(this.base + '/api/v1/auth/refresh', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-        if (!r.ok) return false;
-        this._setAuth(await r.json());
+        const N = ORION.native && ORION.native.isNative ? ORION.native : null;
+        const rt = N ? await N.loadRefresh() : null;
+        if (N && !rt) return false;
+        const r = await fetch(this.base + '/api/v1/auth/refresh', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(N ? { refresh_token: rt, client: 'mobile' } : {}) });
+        if (!r.ok) { if (N && r.status === 401) await N.saveRefresh(null); return false; }
+        const j = await r.json();
+        if (N) await N.saveRefresh(j.refresh_token);
+        this._setAuth(j);
         return true;
       } catch (e) {
         this.snap = { status: 'error', error: { code: 'network', message: 'Cannot reach the ORION server at ' + this.base }, at: Date.now() };
@@ -115,17 +126,22 @@
     async login(email, password) {
       let r;
       try {
-        r = await fetch(this.base + '/api/v1/auth/login', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password, client: 'web' }) });
+        r = await fetch(this.base + '/api/v1/auth/login', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password, client: ORION.native && ORION.native.isNative ? 'mobile' : 'web' }) });
       } catch (e) { return { ok: false, error: 'Cannot reach the ORION server.' }; }
       const j = await r.json().catch(() => ({}));
       if (!r.ok) return { ok: false, error: j.detail || ('Sign-in failed (' + r.status + ')') };
+      if (ORION.native && ORION.native.isNative) await ORION.native.saveRefresh(j.refresh_token);
       this._setAuth(j);
       this.snap = { status: 'loading' }; this._emit();
       await this._afterAuth();
       return { ok: true, user: j.user };
     }
     async logout() {
-      try { await fetch(this.base + '/api/v1/auth/logout', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' }); } catch (e) { /* offline */ }
+      const N = ORION.native && ORION.native.isNative ? ORION.native : null;
+      if (N) { await N.unregisterPush(this).catch(() => {}); }
+      const rt = N ? await N.loadRefresh() : null;
+      try { await fetch(this.base + '/api/v1/auth/logout', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(rt ? { refresh_token: rt } : {}) }); } catch (e) { /* offline */ }
+      if (N) await N.saveRefresh(null);
       this.token = null; this.user = null;
       if (this.ws) { try { this.ws.close(); } catch (e) { /* closed */ } this.ws = null; }
       this.hist.clear();

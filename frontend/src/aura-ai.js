@@ -50,8 +50,8 @@
         document.addEventListener('keydown', unlock, { once: true, capture: true });
       }
     };
-    cap.host = window.claude && typeof window.claude.use === 'function' ? 'claude' : 'browser';
-    if (cap.host !== 'claude') { cap.dict = browserDictation(); fallbackVoice(); cap.ready = true; emit(); return; }
+    cap.host = window.claude && typeof window.claude.use === 'function' ? 'claude' : ORION.native && ORION.native.isNative ? 'android' : 'browser';
+    if (cap.host !== 'claude') { cap.dict = browserDictation(); fallbackVoice(); if (cap.host === 'android') ORION.native.attachAura(ORION.auraAI); cap.ready = true; emit(); return; }
     const get = (n) => Promise.resolve().then(() => window.claude.use(n)).catch(() => null);
     const [s, t, d] = await Promise.all([get('sample'), get('tts'), get('dictation')]);
     cap.sample = s; cap.tts = t; cap.dict = d || browserDictation();
