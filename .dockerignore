@@ -1,6 +1,13 @@
-.venv
-__pycache__
-.pytest_cache
-tests
-frontend/node_modules
+# Build context is the repository root; patterns need **/ to match inside subfolders.
+**/.venv
+**/venv
+**/__pycache__
+**/.pytest_cache
+**/node_modules
+**/tests
 .git
+.env
+*.env
+android/android/app/build
+android/android/build
+hardware/**/.pio
