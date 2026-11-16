@@ -27,6 +27,14 @@ TEST(mq2_warmup_never_raises_smoke) {
   CHECK(r.mq2.quality == Quality::WarmingUp); CHECK(!r.sc.smoke()); CHECK(!r.sc.out.buzzer);
   CHECK(r.mq2.warmupLeftS(r.now) > 0);
 }
+TEST(watchdog_restart_during_smoke_alarms_immediately) {
+  Mq2 m; m.begin(5000, /*coldStart=*/false); m.update(420, 5100);
+  CHECK(m.quality == Quality::Valid); CHECK(m.level == Level::Warning); CHECK(m.warmupLeftS(5100) == 0);
+  Flame f; Water w; Dht d; d.success(29, 70, 5100); SafetyController sc; sc.begin(5100);
+  sc.step(5100, m, f, w, d, true);
+  CHECK(sc.smoke()); CHECK(sc.out.buzzer); CHECK(sc.out.fan);
+  Mq2 cold; cold.begin(5000, true); cold.update(420, 5100); CHECK(cold.quality == Quality::WarmingUp);
+}
 TEST(smoke_response_door_cooldown_and_hysteresis) {
   Rig r; r.warm();
   r.tick(420);

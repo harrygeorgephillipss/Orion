@@ -22,6 +22,12 @@ Mq2 mq2; Flame flame; Water water; Dht dht; SafetyController sc; LinkParser gwLi
 uint32_t seq = 0, lastTelemetry = 0, lastHeartbeat = 0, lastDht = 0, lastRx = 0, lastActuators = 0;
 uint8_t bootReason = 0;
 
+// Optiboot clears MCUSR before the sketch starts but passes the reset flags in register r2.
+// Capture them before the C runtime runs (standard technique), so we can tell power-on from a watchdog reset.
+uint8_t resetFlags __attribute__((section(".noinit")));
+void resetFlagsInit(void) __attribute__((naked)) __attribute__((used)) __attribute__((section(".init0")));
+void resetFlagsInit(void) { __asm__ __volatile__("sts %0, r2\n" : "=m"(resetFlags) :); }
+
 // ---------------- DHT22 (bit-banged; ≥ 2 s between reads) ----------------
 static bool readDht22(float& t, float& h) {
   uint8_t d[5] = {0};
@@ -73,7 +79,7 @@ static void handleFrame(const Frame& f, uint32_t now) {
 }
 
 void setup() {
-  bootReason = MCUSR; MCUSR = 0;          // why we restarted (watchdog, brown-out, power-on…)
+  bootReason = MCUSR | resetFlags; MCUSR = 0;   // why we restarted (watchdog, brown-out, power-on…)
   wdt_disable();
   // Safe defaults BEFORE anything else: fan off, buzzer off, door at rest, green LED on.
   pinMode(PIN_RELAY_FAN, OUTPUT); digitalWrite(PIN_RELAY_FAN, RELAY_ACTIVE_LOW ? HIGH : LOW);
@@ -83,7 +89,10 @@ void setup() {
   door.attach(PIN_SERVO_DOOR); door.write(cfg::DOOR_REST_ANGLE);
   Serial.begin(38400);
   uint32_t now = millis();
-  mq2.begin(now); sc.begin(now);
+  // Warm-up lockout only after a real power-on (PORF). A watchdog/brown-out restart keeps detecting immediately.
+  // Unknown cause (no flags) is treated as a power-on: the boot reason is reported to the server either way.
+  bool cold = (bootReason & _BV(PORF)) || !(bootReason & (_BV(WDRF) | _BV(BORF) | _BV(EXTRF)));
+  mq2.begin(now, cold); sc.begin(now);
   writeOutputs();
   wdt_enable(WDTO_2S);                    // if the loop ever hangs for 2 s, the board resets to the safe defaults above
 }

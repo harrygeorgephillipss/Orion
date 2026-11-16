@@ -1,0 +1,64 @@
+name: ORION CI
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+
+jobs:
+  frontend:
+    runs-on: ubuntu-24.04
+    defaults: { run: { working-directory: frontend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm install --no-save playwright@1.63.0 && npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - run: npm audit
+
+  backend:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: orion, POSTGRES_PASSWORD: orion-dev, POSTGRES_DB: orion_test }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U orion" --health-interval 5s --health-retries 10
+    defaults: { run: { working-directory: backend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: docker run -d -p 1883:1883 eclipse-mosquitto:2 mosquitto -c /mosquitto-no-auth.conf
+      - run: pip install -r requirements-dev.txt pip-audit
+      - run: pytest -q
+      - run: pip-audit -r requirements.txt
+
+  firmware:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: make -C hardware/lib/OrionCore/test
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install platformio
+      - run: cd hardware/arduino_uno && pio run
+      - run: cd hardware/esp32 && cp include/secrets.example.h include/secrets.h && pio run
+
+  android:
+    runs-on: ubuntu-24.04
+    defaults: { run: { working-directory: android } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "21" }
+      - run: npm ci && npm audit
+      - run: npm run sync
+      - run: cd android && ./gradlew assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with: { name: orion-debug-apk, path: android/android/app/build/outputs/apk/debug/app-debug.apk }

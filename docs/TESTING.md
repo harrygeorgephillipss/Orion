@@ -6,8 +6,12 @@
 |---|---|---|
 | Frontend lint | `cd frontend && npm ci && npm run lint` | Node 20+ |
 | Frontend unit (27) | `cd frontend && npm test` | Node 20+ |
-| Frontend browser e2e (16) | `cd frontend && npm run test:e2e` | Playwright + Chromium |
-| Backend (42) | `cd backend && pytest` | PostgreSQL with an `orion_test` database (`ORION_DATABASE_URL` to override); the MQTT test also needs an anonymous dev broker on localhost:1883 (skipped otherwise) |
+| Frontend browser e2e (18, incl. Android bridge) | `cd frontend && npm run test:e2e` | Playwright + Chromium |
+| Firmware logic (20 / 101 checks) | `make -C hardware/lib/OrionCore/test` | g++ |
+| Firmware builds | `cd hardware/arduino_uno && pio run`, `cd hardware/esp32 && pio run` | PlatformIO |
+| Android build | `cd android && npm ci && npm run build:debug` | JDK 21, Android SDK 35 |
+| Aura system test | `node --test tests/system/aura.system.test.js` (same env as below, server with `AURA_PROVIDER=mock`) | server |
+| Backend (55) | `cd backend && pytest` | PostgreSQL with an `orion_test` database (`ORION_DATABASE_URL` to override); the MQTT test also needs an anonymous dev broker on localhost:1883 (skipped otherwise) |
 | Full-stack system test | see below | server + broker + simulator |
 
 ### Full-stack system test
@@ -37,8 +41,13 @@ PostgreSQL 16, Mosquitto 2.1.2, headless Chromium (Playwright).
 |---|---|
 | ESLint (src + tests) | clean |
 | Frontend unit | **27 / 27 passed** |
-| Frontend e2e (390 / 768 / 1280 px) | **16 / 16 passed** |
-| Backend pytest | **42 / 42 passed** (incl. real-broker round trip) |
+| Frontend e2e (390 / 768 / 1280 px + Android bridge) | **18 / 18 passed** |
+| Backend pytest | **55 / 55 passed** (incl. real-broker round trip, Aura, push) |
+| Firmware host tests (ASan + UBSan) | **20 tests / 101 checks passed** |
+| Firmware builds | UNO and ESP32 compile with 0 warnings |
+| Android | debug APK builds (4.9 MB) |
+| Aura system test (scripted provider) | **3 / 3** |
+| Dependency audits | 0 known vulnerabilities |
 | Full-stack system test | **8 / 8 steps passed** — sign-in; live tiles labelled simulated; flame → EMERGENCY with firmware actions and SMS "sent" (not "delivered"); acknowledge keeps alert active; clear only after clear-hold; fan command ends "done · unconfirmed"; fan-off rejected by interlock during smoke; UNO link loss → one controller incident, no per-sensor noise |
 | Gateway power loss (simulator killed) | UI → **OFFLINE in 0.3–0.4 s** via broker last-will, reason "gateway disconnected (last heard 0 s ago)" |
 | Broker auth/ACL (Mosquitto 2.1.2) | wrong password ✗, anonymous ✗, cross-gateway publish dropped, gateway cannot publish commands, gateway receives only its own commands |
@@ -49,7 +58,7 @@ PostgreSQL 16, Mosquitto 2.1.2, headless Chromium (Playwright).
 
 - **No physical hardware was involved.** All device behaviour came from the simulator, which mirrors the planned
   firmware rules but is not the firmware.
-- No TLS (HTTPS/MQTTS) test, no load test, no long-running soak test, no Android test, no AI test.
+- No TLS (HTTPS/MQTTS) test, no load or soak test, no test on a phone, no test against the real AI API.
 - Bugs the tests caught during development (fixed): command toast claimed success when nothing was sent; live
   source threw instead of reporting "not sent" when the server was unreachable; never-reported sensors raised
   false "stopped reporting" alerts during start-up; the last-will handler faked the last-seen time; two backend
@@ -63,7 +72,8 @@ PostgreSQL 16, Mosquitto 2.1.2, headless Chromium (Playwright).
   store arbitrary extra fields; invalid time zones were accepted; **the compose broker could not read its 0600
   password file and crashed on start** (now copied in with the right owner; packet size capped at 64 KB).
 
-## Phase 6 (planned)
+## Phase 6
 
-Fault-injection matrix for the 16 hardware scenarios in the brief, Android tests, AI tool-permission tests,
-calibration procedures and a validation report with bench data — none of which exist yet.
+The 16 fault scenarios, what is covered automatically and the bench procedures still to run are in
+[VALIDATION.md](VALIDATION.md). CI (`.github/workflows/ci.yml`) runs every suite above on each push; it has not run
+yet (the session cannot trigger GitHub Actions).

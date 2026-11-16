@@ -10,23 +10,24 @@ ORION watches a home with an **MQ-2 smoke/gas sensor, flame sensor, water sensor
 
 | Phase | What | Status |
 |---|---|---|
-| 0 | Repository, audit, plan | ✅ done — [docs/AUDIT_AND_PLAN.md](docs/AUDIT_AND_PLAN.md) |
+| 0 | Repository, audit, plan | ✅ [docs/AUDIT_AND_PLAN.md](docs/AUDIT_AND_PLAN.md) |
 | 1 | Stable web app (existing design kept) | ✅ code + automated tests |
-| 2 | Backend, database, real-time, auth | ✅ code + automated tests + full-stack test **with the device simulator** |
-| 3 | ESP32 + UNO firmware, wiring, GSM | ⏳ next — design in [docs/hardware-architecture.md](docs/hardware-architecture.md), protocol in [hardware/communication/PROTOCOL.md](hardware/communication/PROTOCOL.md) |
-| 4 | Independent Aura AI (server-side, Anthropic API) | ⏳ not started — Aura still uses the Claude artifact host or basic offline mode |
-| 5 | Android app (Capacitor) | ⏳ not started |
-| 6 | Testing & safety validation | ⏳ not started (software tests exist; no hardware validation) |
+| 2 | Backend, database, real-time, auth | ✅ code + automated tests + full-stack test with the device simulator (also on the production Docker stack) |
+| 3 | UNO + ESP32 firmware, wiring, GSM | 🟡 code + host tests + **compiles for both chips** — not yet run on physical boards |
+| 4 | Aura on the server (Anthropic API, permissioned tools) | 🟡 code + tests with a scripted provider — not yet run against the real API (needs your key) |
+| 5 | Android app (Capacitor) + push | 🟡 debug APK builds + bridge tests — not yet run on a phone; push needs your Firebase project |
+| 6 | Testing & safety validation | 🟡 CI pipeline + automated coverage map — **no physical bench results yet** ([docs/VALIDATION.md](docs/VALIDATION.md)) |
 
 Evidence levels used everywhere in the docs: **code complete** → **automated / simulated test passed** →
-**physically verified** (only with bench data from real hardware — none yet).
+**built for the real target** → **physically verified** (only with bench data from real hardware — none yet).
 
 ## Repository layout
 
 ```
 frontend/   web app (vanilla JS, single index.html built by build.py), unit + e2e + system tests
 backend/    FastAPI server: REST, WebSocket, MQTT ingest, incident engine, auth — with tests
-hardware/   communication/ (MQTT protocol, device simulator) — firmware + wiring arrive in Phase 3
+hardware/   lib/OrionCore (portable safety logic + tests), arduino_uno/, esp32/, communication/ (protocol, simulator)
+android/    Capacitor Android app (wraps frontend/)
 deployment/ docker-compose (PostgreSQL, Mosquitto, backend, Caddy), broker config + ACL
 scripts/    helper scripts (Mosquitto password file)
 docs/       audit & plan, architecture, API, security, testing, deployment, limitations, handoff
@@ -57,24 +58,29 @@ Open `http://localhost:8000`, sign in with the bootstrap owner from `.env`, regi
 ## Tests
 
 ```bash
-cd frontend && npm ci && npm run check          # lint + 27 unit + 16 browser e2e tests
+cd frontend && npm ci && npm run check          # lint + 27 unit + 18 browser e2e tests
 ```
 
 ```bash
-cd backend && pip install -r requirements-dev.txt && pytest   # 42 tests, needs PostgreSQL (and Mosquitto for 1 test)
+cd backend && pip install -r requirements-dev.txt && pytest   # 55 tests, needs PostgreSQL (and Mosquitto for 1 test)
 ```
 
-Results and how the full-stack system test is run: [docs/TESTING.md](docs/TESTING.md).
+```bash
+make -C hardware/lib/OrionCore/test             # firmware logic: 20 tests / 101 checks
+```
 
-## Aura today
+Results and how the full-stack system tests are run: [docs/TESTING.md](docs/TESTING.md). CI: `.github/workflows/ci.yml`.
 
-Aura's AI currently only works when ORION is opened inside the Claude artifact viewer; elsewhere it answers in
-basic English from ORION data (rule-based), and voice input uses the browser's speech recognition where
-available. Phase 4 moves Aura to the ORION server with a configurable provider and permission-checked tools.
+## Aura
+
+Aura runs on the ORION server ([docs/AURA.md](docs/AURA.md)): set `AURA_PROVIDER=anthropic`, `AURA_MODEL` and
+`ANTHROPIC_API_KEY` on the server. Without them Aura answers in basic mode from ORION data. Emergency advice
+(112 / 101) is given first by a deterministic safety layer whether or not the AI is available.
 
 ## Safety
 
-Local protection (buzzer, fan, door servo, SMS/call on flame) is designed to run on the microcontrollers without
-Wi-Fi, the server, the app or the AI. That design is documented but **not yet built or tested** — see
+Local protection (buzzer, fan, door servo, SMS/call on flame) runs on the microcontrollers without Wi-Fi, the
+server, the app or the AI. The firmware is written, unit-tested and compiles, but **has not been tested on real
+hardware** — see
 [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md). In a real fire or gas leak: get everyone out and call
 **112** (or **101** for fire in India).

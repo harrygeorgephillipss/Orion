@@ -4,9 +4,11 @@
 
 - **ORION is a prototype and is not certified** for any safety purpose. It must not replace a certified smoke
   alarm, gas detector or fire-alarm system. Any claim otherwise would require independent testing and certification.
-- **No hardware exists in the repository yet.** The local emergency logic, watchdogs and GSM alerting are designed
-  (docs/hardware-architecture.md) but not implemented in firmware or tested. Until Phase 3/6 bench results exist,
-  there is **no evidence** ORION protects anything.
+- **The firmware has not been run on real boards.** The local emergency logic, watchdogs and GSM alerting are written,
+  unit-tested on a PC and compile for the UNO and ESP32, but until bench results exist (docs/VALIDATION.md) there is
+  **no evidence** ORION protects anything.
+- A disconnected flame-sensor DO wire or water-sensor wire reads like "no hazard" and cannot be detected in firmware
+  alone. MQ-2 disconnection (low rail) is detected; an MQ-2 stuck high is treated as an alarm (fail-safe).
 - The MQ-2 is a non-selective sensor reporting raw ADC counts; ORION shows no ppm values and cannot tell smoke
   from other gases or cooking fumes. False positives and false negatives have not been measured.
 - A flame sensor sees infrared from a flame in its field of view only; it does not detect smouldering fires.
@@ -17,9 +19,11 @@
 
 ## Software (current state)
 
-- Aura's AI still depends on the Claude artifact host (Phase 4 replaces it); outside it Aura gives basic,
-  English-only, rule-based answers.
-- No Android app yet (Phase 5); no push notifications.
+- Aura's server-side AI has only been tested with a scripted provider; it has not been run against the real
+  Anthropic API (no key in the build environment). Without a configured provider Aura gives basic English answers.
+- The Android app builds but has not been run on a phone; push notifications need the owner's Firebase project and
+  are untested end to end. The refresh token is protected by Android's app sandbox, not the hardware keystore.
+- Emergency phone numbers for offline SMS live in the ESP32 firmware (`secrets.h`); changing them needs a re-flash.
 - TLS for HTTPS/MQTT is configured but untested. Rate limiting is per-process memory.
 - Telemetry retention pruning exists but isn't scheduled.
 - Real-time updates re-fetch the full overview on each event — fine for one home, not designed for many homes.
@@ -27,5 +31,5 @@
   reported back. Changing them requires a firmware change (by design, so a compromised server can't weaken them).
 - The simulator mirrors planned firmware rules but is not the firmware; simulated results prove nothing about
   hardware behaviour.
-- Fonts load from Google Fonts; offline/Android rendering of Indian scripts falls back to system fonts until fonts
-  are bundled (Phase 5).
+- Fonts load from Google Fonts; offline (and in the Android app without internet) Indian scripts fall back to the
+  phone's system fonts, which Android includes for Malayalam, Hindi, Tamil and the other supported scripts.

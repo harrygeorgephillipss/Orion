@@ -48,7 +48,7 @@ What is implemented (Phase 2) and what is still open. Nothing here has been inde
   keys are in `.gitignore`. The server refuses to start in production without `ORION_SECRET_KEY` (≥ 32 chars).
 - Emergency phone numbers live only in the database; non-admins see them masked; they are never written to the
   audit log or to GSM attempt records (masked there).
-- Aura's AI key (Phase 4) will be read from the server environment only and never sent to any client.
+- Aura's AI key is read from the server environment only and never sent to any client.
 
 ## Audit log
 
@@ -59,6 +59,7 @@ command creation/refusal, acknowledgements, contact changes.
 
 - TLS for HTTPS and MQTT configured but not tested; certificate guidance in [DEPLOYMENT.md](DEPLOYMENT.md).
 - Rate limiting is in-memory (single process); a second instance would need a shared store.
-- No automated dependency-vulnerability scan yet (`pip-audit` / `npm audit` to be added to CI in Phase 6).
+- Dependency scans (`pip-audit`, `npm audit`) run in CI; on 2026-11-16 all reported 0 known vulnerabilities.
 - Account recovery (forgotten password) not implemented — the owner resets via the CLI.
-- Firmware secure storage of the gateway password (ESP32 NVS encryption) is Phase 3.
+- The ESP32 keeps Wi-Fi/broker credentials compiled into the firmware (`secrets.h`, git-ignored); flash encryption
+  is not enabled. Anyone with physical access to the board could read them.

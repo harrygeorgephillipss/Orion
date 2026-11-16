@@ -19,7 +19,7 @@ void Mq2::update(int r, uint32_t now) {
     return;  // hold the previous decision while the fault is being confirmed
   }
   rail_.check(r, true, false);
-  if (!started_ || !elapsed(now, start_, cfg::MQ2_WARMUP_MS)) { quality = Quality::WarmingUp; level = Level::Unknown; return; }
+  if (!started_ || (!warm_ && !elapsed(now, start_, cfg::MQ2_WARMUP_MS))) { quality = Quality::WarmingUp; level = Level::Unknown; return; }
   quality = Quality::Valid;
   Level prev = level == Level::Unknown ? Level::Normal : level;
   Level next;
@@ -31,6 +31,7 @@ void Mq2::update(int r, uint32_t now) {
 
 uint16_t Mq2::warmupLeftS(uint32_t now) const {
   if (!started_) return (uint16_t)(cfg::MQ2_WARMUP_MS / 1000);
+  if (warm_) return 0;
   uint32_t e = now - start_;
   return e >= cfg::MQ2_WARMUP_MS ? 0 : (uint16_t)((cfg::MQ2_WARMUP_MS - e + 999) / 1000);
 }

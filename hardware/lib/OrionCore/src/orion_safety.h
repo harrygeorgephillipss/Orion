@@ -19,7 +19,9 @@ struct RailWatch {
 
 class Mq2 {
  public:
-  void begin(uint32_t now) { start_ = now; started_ = true; }
+  // coldStart: true after a real power-on (heater cold → warm-up lockout). After a watchdog or brown-out reset
+  // the heater was already hot, so detection resumes at once — a crash during an emergency must not mute the alarm.
+  void begin(uint32_t now, bool coldStart = true) { start_ = now; started_ = true; warm_ = !coldStart; }
   void update(int raw, uint32_t now);
   int raw = -1;
   Level level = Level::Unknown;
@@ -28,6 +30,7 @@ class Mq2 {
  private:
   uint32_t start_ = 0;
   bool started_ = false;
+  bool warm_ = false;
   RailWatch rail_;
 };
 
