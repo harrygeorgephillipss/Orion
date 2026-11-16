@@ -124,7 +124,7 @@
       const v = browserVoiceFor(code);
       const parts = String(text).match(/[^.!?।\n]+[.!?।]?/g) || [String(text)];
       const chunks = []; let cur = '';
-      for (const p of parts) { if ((cur + p).length > 180 && cur) { chunks.push(cur); cur = p; } else cur += p; }
+      for (const p of parts) { if ((cur + p).length > 180 && cur) { chunks.push(cur); cur = p; } else cur += (cur && !/\s$/.test(cur) ? " " : "") + p; }
       if (cur.trim()) chunks.push(cur);
       live.length = 0;
       let left = chunks.length, ended = false;
@@ -373,7 +373,9 @@
     for (const l of lines) { if (/^\s*[•\-*]\s+/.test(l) && !rest.join('').trim()) facts.push(l.replace(/^\s*[•\-*]\s+/, '')); else rest.push(l); }
     return { facts, body: rest.join('\n').trim() };
   }
-  const plainForSpeech = (text) => String(text).replace(/^\s*[•\-*]\s+/gm, '').replace(/[*_#`]/g, '').replace(/\n{2,}/g, '\n').trim();
+  // Each displayed line becomes its own spoken sentence (a pause between facts instead of running them together).
+  const plainForSpeech = (text) => String(text).replace(/^\s*[•\-*]\s+/gm, '').replace(/[*_#`]/g, '').trim()
+    .replace(/([^.!?।\s])[ \t]*\n+/g, '$1. ').replace(/\s*\n+\s*/g, ' ');
 
   const ERR = {
     not_granted: 'Aura needs your permission to use Claude. Basic mode is on for now.',

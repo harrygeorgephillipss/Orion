@@ -54,7 +54,7 @@ Open `http://localhost:8000`, sign in with the bootstrap owner from `.env`, and 
 ## Tests
 
 ```bash
-cd frontend && npm ci && npm run check          # lint + 27 unit + 18 browser e2e tests
+cd frontend && npm ci && npm run check          # lint + 27 unit + 22 browser e2e tests
 ```
 
 ```bash

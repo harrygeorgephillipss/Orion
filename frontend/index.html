@@ -656,14 +656,26 @@ ORION.fmt = (function () {
       });
     },
 
-    /* Same interface as the browser dictation adapter in aura-ai.js. */
+    /* Same interface as the browser dictation adapter in aura-ai.js.
+       With partialResults the plugin's start() resolves at once; the end of listening is the
+       'listeningState' {status:'stopped'} event, and recognised words arrive as 'partialResults'. */
     dictation() {
       if (!Speech) return null;
-      let on = false;
+      let on = false, last = '', guard = null;
       const L = { partial: [], final: [], state: [] };
       const fire = (k, v) => L[k].forEach((f) => { try { f(v); } catch (e) { console.error(e); } });
-      let last = '';
-      Speech.addListener('partialResults', (d) => { last = (d.matches && d.matches[0]) || ''; fire('partial', { text: last }); });
+      const BCP = { en: 'en-IN', ml: 'ml-IN', hi: 'hi-IN', bn: 'bn-IN', ta: 'ta-IN', te: 'te-IN', kn: 'kn-IN', mr: 'mr-IN', gu: 'gu-IN', pa: 'pa-IN', or: 'or-IN', ur: 'ur-IN', as: 'as-IN' };
+      const finish = (reason) => {
+        if (!on) return;
+        on = false; clearTimeout(guard);
+        if (last) fire('final', { text: last + ' ' });
+        last = ''; fire('partial', { text: '' });
+        fire('state', { state: 'idle', reason: reason || 'stopped' });
+      };
+      // If Android reports nothing for a while (e.g. a recogniser error), don't leave the mic "listening" forever.
+      const arm = () => { clearTimeout(guard); guard = setTimeout(() => { Speech.stop().catch(() => {}); finish('stopped'); }, 15000); };
+      Speech.addListener('partialResults', (d) => { if (!on) return; last = (d.matches && d.matches[0]) || last; fire('partial', { text: last }); arm(); });
+      Speech.addListener('listeningState', (d) => { if (d && d.status === 'stopped') finish('stopped'); });
       return {
         kind: 'native',
         active: () => on,
@@ -673,13 +685,13 @@ ORION.fmt = (function () {
           if (perm.speechRecognition !== 'granted') throw { code: 'not_granted' };
           const avail = await Speech.available().catch(() => ({ available: false }));
           if (!avail.available) throw { code: 'unavailable' };
-          on = true; last = ''; fire('state', { state: 'listening' });
-          const BCP = { en: 'en-IN', ml: 'ml-IN', hi: 'hi-IN', bn: 'bn-IN', ta: 'ta-IN', te: 'te-IN', kn: 'kn-IN', mr: 'mr-IN', gu: 'gu-IN', pa: 'pa-IN', or: 'or-IN', ur: 'ur-IN', as: 'as-IN' };
-          Speech.start({ language: (opts && BCP[opts.language]) || 'en-IN', maxResults: 1, partialResults: true, popup: false })
-            .then(() => { if (last) fire('final', { text: last + ' ' }); }, () => {})
-            .finally(() => { on = false; fire('partial', { text: '' }); fire('state', { state: 'idle', reason: 'stopped' }); });
+          on = true; last = ''; arm();
+          fire('state', { state: 'listening' });
+          try {
+            await Speech.start({ language: (opts && BCP[opts.language]) || 'en-IN', maxResults: 1, partialResults: true, popup: false });
+          } catch (e) { finish('stopped'); throw { code: 'upstream_error' }; }
         },
-        async stop() { try { await Speech.stop(); } catch (e) { /* not listening */ } if (last) fire('final', { text: last + ' ' }); last = ''; },
+        async stop() { try { await Speech.stop(); } catch (e) { /* not listening */ } finish('stopped'); },
       };
     },
 
@@ -2363,7 +2375,7 @@ ORION.fmt = (function () {
       const v = browserVoiceFor(code);
       const parts = String(text).match(/[^.!?।\n]+[.!?।]?/g) || [String(text)];
       const chunks = []; let cur = '';
-      for (const p of parts) { if ((cur + p).length > 180 && cur) { chunks.push(cur); cur = p; } else cur += p; }
+      for (const p of parts) { if ((cur + p).length > 180 && cur) { chunks.push(cur); cur = p; } else cur += (cur && !/\s$/.test(cur) ? " " : "") + p; }
       if (cur.trim()) chunks.push(cur);
       live.length = 0;
       let left = chunks.length, ended = false;
@@ -2612,7 +2624,9 @@ ORION.fmt = (function () {
     for (const l of lines) { if (/^\s*[•\-*]\s+/.test(l) && !rest.join('').trim()) facts.push(l.replace(/^\s*[•\-*]\s+/, '')); else rest.push(l); }
     return { facts, body: rest.join('\n').trim() };
   }
-  const plainForSpeech = (text) => String(text).replace(/^\s*[•\-*]\s+/gm, '').replace(/[*_#`]/g, '').replace(/\n{2,}/g, '\n').trim();
+  // Each displayed line becomes its own spoken sentence (a pause between facts instead of running them together).
+  const plainForSpeech = (text) => String(text).replace(/^\s*[•\-*]\s+/gm, '').replace(/[*_#`]/g, '').trim()
+    .replace(/([^.!?।\s])[ \t]*\n+/g, '$1. ').replace(/\s*\n+\s*/g, ' ');
 
   const ERR = {
     not_granted: 'Aura needs your permission to use Claude. Basic mode is on for now.',
@@ -3046,7 +3060,7 @@ ORION.fmt = (function () {
     V.heard = ''; V.partial = ''; V.carry = '';
     if (!said) return;
     if (END.test(said)) { V.shown = said; V.reply = 'Okay — I’m here whenever you need me.'; endConversation(); return; }
-    V.shown = said; V.reply = ''; V.state = 'thinking'; vRender();
+    V.shown = said; V.reply = ''; V.state = 'thinking'; V.voiceTurn = true; vRender();
     // If this reply will need Claude's own voice (no device voice for the language), switch the mic off now,
     // while Aura is still thinking — not after the answer arrives.
     const d = AI.cap.dict, code = ui().auraLang !== 'auto' ? ui().auraLang : AI.detectLang(said);
@@ -3063,6 +3077,10 @@ ORION.fmt = (function () {
     if (!V.open) return;
     const d = AI.cap.dict;
     if (V.conv && d && d.active()) { V.muteUntil = Date.now() + 350; V.state = 'listening'; vRender(); armIdle(); return; }
+    // Android's recogniser stops after each sentence: open the mic again so the conversation continues hands-free.
+    // If nothing is said, the idle timeout ends it as usual.
+    if (V.voiceTurn && d && d.kind === 'native') { V.voiceTurn = false; V.state = 'ready'; orbTap(); return; }
+    V.voiceTurn = false;
     if (V.kb) {
       const i = el('vo-in');
       if (i) {

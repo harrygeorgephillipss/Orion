@@ -414,7 +414,7 @@
     V.heard = ''; V.partial = ''; V.carry = '';
     if (!said) return;
     if (END.test(said)) { V.shown = said; V.reply = 'Okay — I’m here whenever you need me.'; endConversation(); return; }
-    V.shown = said; V.reply = ''; V.state = 'thinking'; vRender();
+    V.shown = said; V.reply = ''; V.state = 'thinking'; V.voiceTurn = true; vRender();
     // If this reply will need Claude's own voice (no device voice for the language), switch the mic off now,
     // while Aura is still thinking — not after the answer arrives.
     const d = AI.cap.dict, code = ui().auraLang !== 'auto' ? ui().auraLang : AI.detectLang(said);
@@ -431,6 +431,10 @@
     if (!V.open) return;
     const d = AI.cap.dict;
     if (V.conv && d && d.active()) { V.muteUntil = Date.now() + 350; V.state = 'listening'; vRender(); armIdle(); return; }
+    // Android's recogniser stops after each sentence: open the mic again so the conversation continues hands-free.
+    // If nothing is said, the idle timeout ends it as usual.
+    if (V.voiceTurn && d && d.kind === 'native') { V.voiceTurn = false; V.state = 'ready'; orbTap(); return; }
+    V.voiceTurn = false;
     if (V.kb) {
       const i = el('vo-in');
       if (i) {

@@ -64,7 +64,13 @@ safety controller may still refuse. Viewers never get proposals.
 Tool results are passed to the model as data; the prompt tells it to ignore instructions inside device names,
 labels or fault texts, and in any case no tool exists that such an instruction could abuse.
 
-## Voice and languages
+## Voice and languages (talk-back)
+
+Voice mode: tap the wave button → speak → Aura answers out loud, sentence by sentence as the answer streams →
+the microphone opens again for the next question (on Android it re-opens automatically after each answer); a pause
+of 15 s ends the conversation. Automated tests (`frontend/tests/e2e/voice.e2e.test.js`, `native.e2e.test.js`) drive
+this loop with a scripted microphone and a recording speaker in the browser and through the Android plugin path,
+including Malayalam (mic `ml-IN`, voice `ml-IN`). **Not yet checked with a real microphone, speaker or phone voices.**
 
 Speech-to-text and text-to-speech run on the device (browser Web Speech API; Android native speech in Phase 5), so
 audio never reaches the ORION server. 14 reply languages are kept (English, Malayalam, Hindi, Bengali, Tamil, Telugu,

@@ -57,14 +57,26 @@
       });
     },
 
-    /* Same interface as the browser dictation adapter in aura-ai.js. */
+    /* Same interface as the browser dictation adapter in aura-ai.js.
+       With partialResults the plugin's start() resolves at once; the end of listening is the
+       'listeningState' {status:'stopped'} event, and recognised words arrive as 'partialResults'. */
     dictation() {
       if (!Speech) return null;
-      let on = false;
+      let on = false, last = '', guard = null;
       const L = { partial: [], final: [], state: [] };
       const fire = (k, v) => L[k].forEach((f) => { try { f(v); } catch (e) { console.error(e); } });
-      let last = '';
-      Speech.addListener('partialResults', (d) => { last = (d.matches && d.matches[0]) || ''; fire('partial', { text: last }); });
+      const BCP = { en: 'en-IN', ml: 'ml-IN', hi: 'hi-IN', bn: 'bn-IN', ta: 'ta-IN', te: 'te-IN', kn: 'kn-IN', mr: 'mr-IN', gu: 'gu-IN', pa: 'pa-IN', or: 'or-IN', ur: 'ur-IN', as: 'as-IN' };
+      const finish = (reason) => {
+        if (!on) return;
+        on = false; clearTimeout(guard);
+        if (last) fire('final', { text: last + ' ' });
+        last = ''; fire('partial', { text: '' });
+        fire('state', { state: 'idle', reason: reason || 'stopped' });
+      };
+      // If Android reports nothing for a while (e.g. a recogniser error), don't leave the mic "listening" forever.
+      const arm = () => { clearTimeout(guard); guard = setTimeout(() => { Speech.stop().catch(() => {}); finish('stopped'); }, 15000); };
+      Speech.addListener('partialResults', (d) => { if (!on) return; last = (d.matches && d.matches[0]) || last; fire('partial', { text: last }); arm(); });
+      Speech.addListener('listeningState', (d) => { if (d && d.status === 'stopped') finish('stopped'); });
       return {
         kind: 'native',
         active: () => on,
@@ -74,13 +86,13 @@
           if (perm.speechRecognition !== 'granted') throw { code: 'not_granted' };
           const avail = await Speech.available().catch(() => ({ available: false }));
           if (!avail.available) throw { code: 'unavailable' };
-          on = true; last = ''; fire('state', { state: 'listening' });
-          const BCP = { en: 'en-IN', ml: 'ml-IN', hi: 'hi-IN', bn: 'bn-IN', ta: 'ta-IN', te: 'te-IN', kn: 'kn-IN', mr: 'mr-IN', gu: 'gu-IN', pa: 'pa-IN', or: 'or-IN', ur: 'ur-IN', as: 'as-IN' };
-          Speech.start({ language: (opts && BCP[opts.language]) || 'en-IN', maxResults: 1, partialResults: true, popup: false })
-            .then(() => { if (last) fire('final', { text: last + ' ' }); }, () => {})
-            .finally(() => { on = false; fire('partial', { text: '' }); fire('state', { state: 'idle', reason: 'stopped' }); });
+          on = true; last = ''; arm();
+          fire('state', { state: 'listening' });
+          try {
+            await Speech.start({ language: (opts && BCP[opts.language]) || 'en-IN', maxResults: 1, partialResults: true, popup: false });
+          } catch (e) { finish('stopped'); throw { code: 'upstream_error' }; }
         },
-        async stop() { try { await Speech.stop(); } catch (e) { /* not listening */ } if (last) fire('final', { text: last + ' ' }); last = ''; },
+        async stop() { try { await Speech.stop(); } catch (e) { /* not listening */ } finish('stopped'); },
       };
     },
 

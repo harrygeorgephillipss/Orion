@@ -6,7 +6,7 @@
 |---|---|---|
 | Frontend lint | `cd frontend && npm ci && npm run lint` | Node 20+ |
 | Frontend unit (27) | `cd frontend && npm test` | Node 20+ |
-| Frontend browser e2e (18, incl. Android bridge) | `cd frontend && npm run test:e2e` | Playwright + Chromium |
+| Frontend browser e2e (22, incl. Android bridge and voice) | `cd frontend && npm run test:e2e` | Playwright + Chromium |
 | Firmware logic (20 / 101 checks) | `make -C hardware/lib/OrionCore/test` | g++ |
 | Firmware builds | `cd hardware/arduino_uno && pio run`, `cd hardware/esp32 && pio run` | PlatformIO |
 | Android build | `cd android && npm ci && npm run build:debug` | JDK 21, Android SDK 35 |
@@ -42,7 +42,7 @@ PostgreSQL 16, Mosquitto 2.1.2, headless Chromium (Playwright).
 |---|---|
 | ESLint (src + tests) | clean |
 | Frontend unit | **27 / 27 passed** |
-| Frontend e2e (390 / 768 / 1280 px + Android bridge) | **18 / 18 passed** |
+| Frontend e2e (390 / 768 / 1280 px, Android bridge, Aura voice talk-back) | **22 / 22 passed** |
 | Settings system test | **6 / 6** — a contact added in the app reached the (simulated) gateway and the flame SMS went to it |
 | Backend pytest | **57 tests: 56 passed, 1 skipped** in the final run (the MQTT round-trip test needs an anonymous dev broker; it passed in earlier runs this session) (incl. real-broker round trip, Aura, push) |
 | Firmware host tests (ASan + UBSan) | **20 tests / 101 checks passed** |
