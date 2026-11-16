@@ -33,7 +33,7 @@ EOF
 say "1/6  Packages (Docker, Git, firewall)"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq git curl ufw python3 ca-certificates >/dev/null
+apt-get install -y -qq git curl python3 ca-certificates openssl >/dev/null
 if ! docker compose version >/dev/null 2>&1; then
   apt-get install -y -qq docker.io docker-compose-v2 >/dev/null 2>&1 || curl -fsSL https://get.docker.com | sh
 fi
@@ -89,23 +89,34 @@ setenv ORION_MQTT_TLS_BIND 8883
 chmod 600 "$DIR/.env"
 
 say "5/6  Firewall"
-ufw allow OpenSSH >/dev/null; ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null; ufw allow 8883/tcp >/dev/null
-ufw --force enable >/dev/null
-info "Open: 22 (SSH), 80 + 443 (app), 8883 (ESP32, encrypted). If your provider has its own firewall, open the same ports there."
+if command -v netfilter-persistent >/dev/null || iptables -S INPUT 2>/dev/null | grep -q -- '-j REJECT'; then
+  # Oracle Cloud images ship their own iptables rules (reject all but SSH) managed by netfilter-persistent; ufw
+  # conflicts with that package, so open the ports in those rules instead.
+  for p in 443 80 8883; do iptables -C INPUT -p tcp --dport "$p" -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p tcp --dport "$p" -j ACCEPT; done
+  netfilter-persistent save >/dev/null 2>&1 || true
+  info "Opened 80, 443, 8883 in the image's iptables rules."
+else
+  apt-get install -y -qq ufw >/dev/null
+  ufw allow OpenSSH >/dev/null; ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null; ufw allow 8883/tcp >/dev/null
+  ufw --force enable >/dev/null
+  info "ufw: 22, 80, 443, 8883 open; everything else closed."
+fi
+info "ALSO open TCP 80, 443, 8883 in your provider's firewall (Oracle: VCN > Security List > Ingress Rules)."
 
 say "6/6  Starting ORION (first build takes a few minutes)"
 cd "$DIR"
 docker compose --profile https -f deployment/docker-compose.yml --env-file .env up -d --build
 ok=""
 for _ in $(seq 1 60); do
-  if curl -fsS "https://$DOMAIN/api/v1/health" >/dev/null 2>&1; then ok=1; break; fi
+  # checked on this server itself (some clouds can't reach their own public IP); proves the certificate is valid
+  if curl -fsS --resolve "$DOMAIN:443:127.0.0.1" "https://$DOMAIN/api/v1/health" >/dev/null 2>&1; then ok=1; break; fi
   sleep 5
 done
-[ -n "$ok" ] || die "https://$DOMAIN is not answering yet. Check ports 80/443 in your provider's firewall, then: docker compose -f deployment/docker-compose.yml logs caddy backend"
+[ -n "$ok" ] || die "No HTTPS certificate yet. Let's Encrypt must reach this server on port 80: open TCP 80/443 in your provider's firewall (Oracle: Security List), then run this again. Details: docker compose -f deployment/docker-compose.yml logs caddy"
 # the broker picks up Caddy's certificate on its next start
 docker compose --profile https -f deployment/docker-compose.yml --env-file .env restart mqtt >/dev/null
 sleep 3
-if echo | timeout 8 openssl s_client -connect "$DOMAIN:8883" -servername "$DOMAIN" -verify_return_error >/dev/null 2>&1; then tls="ready"; else tls="not ready yet (it starts once the certificate exists; check again in a minute)"; fi
+if echo | timeout 8 openssl s_client -connect "127.0.0.1:8883" -servername "$DOMAIN" -verify_return_error >/dev/null 2>&1; then tls="ready"; else tls="not ready yet (it starts once the certificate exists; check again in a minute)"; fi
 
 printf '\n\033[32m================ ORION is running ================\033[0m\n'
 echo " Phone app / browser address :  https://$DOMAIN"

@@ -12,6 +12,22 @@ Any provider with a plain Ubuntu server works, for example Hetzner Cloud, Digita
 - Allow SSH login (password or SSH key). Note the server's **public IP address**.
 - If the provider has its own firewall, open TCP **22, 80, 443, 8883**.
 
+### Oracle Cloud Always Free
+
+1. Compute → Instances → **Create instance**. Image: **Canonical Ubuntu 24.04**. Shape: **Ampere VM.Standard.A1.Flex**
+   (1–2 OCPU, 6–12 GB, Always Free) — or VM.Standard.E2.1.Micro if Ampere says "out of capacity" (try another
+   availability domain or later first). Networking: create a new VCN with a **public subnet** and **assign a public
+   IPv4 address**. SSH keys: **Save private key**.
+2. Instance page → subnet → **Security List** → **Add Ingress Rules**: source `0.0.0.0/0`, TCP, destination ports
+   `80,443,8883`.
+3. Connect: `ssh -i <downloaded-key> ubuntu@<public-ip>` (Windows PowerShell works; if it complains about key
+   permissions, move the key to `C:\Users\<you>\.ssh\`).
+4. Oracle may reclaim Always Free instances that stay idle for a week; upgrading the account to Pay-As-You-Go
+   (still free within the Always Free limits) avoids that. The installer opens the ports in Oracle's own iptables
+   rules; the Security List step above is still needed.
+
+The backend's Python packages all have ready-made Arm (aarch64) builds, so Ampere works.
+
 ## 2. Optional: your own name
 
 The installer can use a free automatic name, `<ip-with-dashes>.sslip.io`. A name you control is more robust:
