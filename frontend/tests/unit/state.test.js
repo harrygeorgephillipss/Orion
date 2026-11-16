@@ -99,3 +99,12 @@ test('a sensor stale because its controller is offline is reported once, as the 
   assert.equal(e.system, 'DEGRADED');
   assert.deepEqual(Array.from(e.reasons), ['Arduino UNO: heartbeat missing']);
 });
+
+test('a gateway the server reports as disconnected is OFFLINE immediately, with its true last-heard age', () => {
+  const { ORION, cfg, sim, clock } = setup();
+  const snap = sim.snapshot();
+  snap.controllers.esp32.connected = false;
+  const e = ORION.state.evaluate(snap, cfg, clock.now + 3000);
+  assert.equal(e.system, 'OFFLINE');
+  assert.match(e.reasons[0], /disconnected \(last heard 3 s ago\)/);
+});

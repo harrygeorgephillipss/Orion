@@ -18,7 +18,8 @@
     const fresh = cfg.freshness.sensor_s * 1000, hb = cfg.freshness.heartbeat_s * 1000;
     for (const [k, c] of Object.entries(snap.controllers || {})) {
       const age = c.last_seen_at == null ? Infinity : now - c.last_seen_at;
-      out.controllers[k] = { online: age <= hb, age };
+      // `connected: false` = the server knows the link dropped (MQTT last-will / UNO link loss) — offline now.
+      out.controllers[k] = { online: age <= hb && c.connected !== false, age, disconnected: c.connected === false };
     }
     const sensors = R.sensorList(snap);
     for (const s of sensors) {
@@ -64,7 +65,10 @@
     const gatewayDown = gk ? !out.controllers[gk].online : (ctrls.length === 0 || ctrls.every((c) => !c.online));
     if (gatewayDown) {
       out.system = 'OFFLINE';
-      const who = gk ? `${snap.controllers[gk].name} gateway heartbeat missing for ${secs(out.controllers[gk].age)}` : 'no controller heartbeat';
+      const g = gk ? out.controllers[gk] : null;
+      const who = !gk ? 'no controller heartbeat'
+        : g.disconnected ? `${snap.controllers[gk].name} gateway disconnected (last heard ${secs(g.age)} ago)`
+          : `${snap.controllers[gk].name} gateway heartbeat missing for ${secs(g.age)}`;
       out.reasons.push(`No valid controller connection: ${who}. All values below are last-known and stale.`);
       if (hazards.length) out.lastKnown = crit ? 'EMERGENCY' : 'ATTENTION';
       out.notes = degraded;

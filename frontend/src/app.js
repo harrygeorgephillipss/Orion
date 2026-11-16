@@ -42,12 +42,17 @@
   app.setSource = function (mode) {
     if (this.source) this.source.stop();
     this.mode = mode;
+    U.store.set('orion.mode', mode);
     this.source = mode === 'demo' ? (this._demo || (this._demo = new ORION.sources.DemoSource())) : new ORION.sources.LiveSource();
+    this.user = mode === 'demo' ? { name: 'Simulation user', role: 'owner' } : { name: 'Not signed in', role: 'viewer' };
     this.source.listeners = [];
     this.source.start(() => this.onData());
     if (mode === 'live') this.onData();
     renderChrome();
   };
+  /* Who may send device commands: anyone in simulation; member or higher on a live server. */
+  app.canCommand = function () { return this.mode === 'demo' || ['owner', 'admin', 'member'].includes(this.user.role); };
+  app.isAdmin = function () { return this.mode === 'live' && ['owner', 'admin'].includes(this.user.role); };
 
   app.onData = function () {
     this.ui.tick++;
@@ -138,6 +143,18 @@
     const n = app.snap.incidents ? app.snap.incidents.filter((i) => i.state !== 'cleared' && (i.severity === 'critical' || i.severity === 'warning')).length : 0;
     document.querySelectorAll('[data-r="alerts"]').forEach((a) => { let b = a.querySelector('.cnt'); if (n) { if (!b) { b = document.createElement('b'); b.className = 'cnt'; a.appendChild(b); } b.textContent = n; } else if (b) b.remove(); });
     document.body.dataset.sys = ev.system;
+    // Live server with simulated devices registered: say so on every page.
+    const simDevices = app.mode === 'live' && app.snap && app.snap.contains_simulated;
+    const bar = document.getElementById('demoBar');
+    if (bar) {
+      const want = app.mode === 'demo' || !!simDevices;
+      if (bar.hidden === want) bar.hidden = !want;
+      const txt = app.mode === 'demo' ? '<b>SIMULATION</b> · every value is invented test data — no hardware is connected'
+        : app.snap.simulated ? '<b>SIMULATED DEVICES</b> · this server is receiving data from a device simulator, not hardware'
+          : '<b>INCLUDES SIMULATED DEVICES</b> · values tagged “simulated” are not hardware readings';
+      const tEl = document.getElementById('demoTxt'); if (tEl && tEl._h !== txt) { tEl.innerHTML = txt; tEl._h = txt; }
+      const b = document.getElementById('demoBtn'); if (b) b.hidden = app.mode !== 'demo';
+    }
     const sc = document.getElementById('scName');
     if (sc && app.mode === 'demo') { const s = ORION.sources.SCENARIOS.find((x) => x.id === app.source.scenario); sc.textContent = s ? s.label : ''; }
   }
@@ -169,6 +186,26 @@
     openModal(`<h2 id="md-t">${esc(title)}</h2>${body}`, { actions: `<button class="btn ghost" data-action="md-cancel">Cancel</button><button class="btn ${danger ? 'danger' : ''}" id="md-ok">${esc(confirm)}</button>`, focus: '#md-ok' });
     document.getElementById('md-ok').onclick = () => { closeModal(); onConfirm(); };
   }
+  /* Sign-in dialog (live mode). The password is sent only to the ORION server, over HTTPS in production. */
+  function loginBox() {
+    if (app.mode !== 'live' || !app.source.login) return;
+    app._sheet = null;
+    openModal(`<h2 id="md-t">Sign in to ORION</h2><p class="hint">Server: ${esc(app.source.base || '—')}</p>
+      <form id="login-f" class="stack" autocomplete="on"><label class="fld"><span>Email</span><input id="lg-e" type="email" autocomplete="username" required maxlength="254"></label>
+      <label class="fld"><span>Password</span><input id="lg-p" type="password" autocomplete="current-password" required maxlength="200"></label>
+      <div id="lg-err" class="note crit" hidden></div><div class="row-btns"><button class="btn" type="submit" id="lg-go">Sign in</button></div></form>`, { focus: '#lg-e' });
+    document.getElementById('login-f').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('lg-go'), err = document.getElementById('lg-err');
+      btn.disabled = true; err.hidden = true;
+      app.source.login(document.getElementById('lg-e').value.trim(), document.getElementById('lg-p').value).then((r) => {
+        btn.disabled = false;
+        if (r.ok) { closeModal(); app.toast('Signed in as ' + r.user.name + ' (' + r.user.role + ').'); app.mountView(); }
+        else { err.hidden = false; err.textContent = r.error; }
+      });
+    });
+  }
+
   app.sheet = function (key, render, live) {
     this._sheet = { key, render, live: !!live };
     const inner = render();
@@ -199,8 +236,19 @@
       confirmBox({
         title: 'Mark this alert as seen?', confirm: 'Mark as seen',
         body: `<p><b>${esc(C.incidentSentence(inc))}</b><br><span class="hint">Started ${esc(F.dt(inc.opened_at))}</span></p><p>This only records that you know about it. It <b>won’t</b> stop the buzzer or end the alert — that happens by itself when the sensor reads normal again.</p>`,
-        onConfirm() { const r = app.source.acknowledge(inc.id, app.user.name); app.toast(r.ok ? 'Marked as seen. The alert stays until the sensor reads normal.' : 'Couldn’t save: ' + r.error, r.ok ? '' : 'bad'); app.onData(); },
+        onConfirm() {
+          Promise.resolve().then(() => app.source.acknowledge(inc.id, app.user.name)).then((r) => {
+            app.toast(r && r.ok ? 'Marked as seen. The alert stays until the sensor reads normal.' : 'Couldn’t save: ' + ((r && r.error) || 'no response'), r && r.ok ? '' : 'bad'); app.onData();
+          });
+        },
       });
+    } else if (a === 'login-open') loginBox();
+    else if (a === 'logout') { if (app.source.logout) app.source.logout().then(() => { app.toast('Signed out.'); app.mountView(); }); }
+    else if (a === 'server-save') {
+      const i = document.getElementById('c-server'); const v = i ? i.value.trim() : '';
+      if (v && !/^https?:\/\/[^\s]+$/i.test(v)) { app.toast('Server address must start with http:// or https://', 'bad'); return; }
+      U.store.set(ORION.sources.LiveSource.SERVER_KEY, v.replace(/\/+$/, ''));
+      app.setSource('live'); app.mountView(); app.toast(v ? 'Server address saved.' : 'Using this page’s own server.');
     } else if (a === 'cmd') app.confirmCommand(t.dataset.act);
     else if (a === 'aura-open') { if (panelOpen()) closePanel(); else openPanel(); }
     else if (a === 'aura-close') closePanel();
@@ -244,7 +292,9 @@
     window.addEventListener('hashchange', route);
     let rz, lastW = window.innerWidth;
     window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (Math.abs(window.innerWidth - lastW) > 40 && ['home', 'history'].includes(app.route)) { lastW = window.innerWidth; app.mountView(); } }, 250); });
-    app.setSource('demo');
+    // Served by an ORION server → live data by default; opened as a local file → simulation. The choice is remembered.
+    const saved = U.store.get('orion.mode', null);
+    app.setSource(saved === 'demo' || saved === 'live' ? saved : (/^https?:$/.test(location.protocol) ? 'live' : 'demo'));
     route();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();

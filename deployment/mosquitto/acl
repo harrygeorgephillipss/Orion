@@ -1,0 +1,13 @@
+# Backend service account: everything under orion/
+user orion-backend
+topic readwrite orion/#
+
+# Every gateway logs in with username = its gateway id and may only touch its own subtree.
+pattern write orion/+/%u/status
+pattern write orion/+/%u/heartbeat
+pattern write orion/+/%u/telemetry
+pattern write orion/+/%u/actuators
+pattern write orion/+/%u/event
+pattern write orion/+/%u/gsm
+pattern write orion/+/%u/cmd_ack
+pattern read orion/+/%u/cmd

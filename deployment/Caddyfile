@@ -1,0 +1,5 @@
+# Replace orion.example.com with your domain (public DNS) — or use `tls internal` for a LAN-only certificate.
+orion.example.com {
+	encode gzip
+	reverse_proxy backend:8000
+}

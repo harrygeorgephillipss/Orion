@@ -429,3 +429,4 @@ details.more>summary::-webkit-details-marker{display:none}
 .vo:not(.kb):not(.typing) .vo-alt{display:none}
 /* listening is shown by the orb's own pulse only — no rings around it */
 .vo-ring{display:none}
+.row-btns input{flex:1;min-width:0;width:auto}

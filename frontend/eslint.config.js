@@ -22,5 +22,5 @@ module.exports = [
     languageOptions: { ecmaVersion: 2022, sourceType: 'commonjs', globals: { ...globals.node } },
   },
   // e2e callbacks passed to page.evaluate() run inside the browser page.
-  { files: ['tests/e2e/**/*.js'], languageOptions: { globals: { ...globals.browser, ORION: 'readonly' } } },
+  { files: ['tests/e2e/**/*.js', 'tests/system/**/*.js'], languageOptions: { globals: { ...globals.browser, ORION: 'readonly' } } },
 ];

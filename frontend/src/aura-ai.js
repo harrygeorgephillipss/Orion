@@ -315,7 +315,7 @@
         execute(i) {
           const key = `${i.device}:${i.action}`;
           if (!['fan:on', 'fan:off', 'buzzer:test'].includes(key)) throw new Error('Not allowed. Only fan on/off and buzzer test can be proposed; the door, mist maker and SG90 are disabled pending safety decisions.');
-          if (app.mode !== 'demo') throw new Error('Device control is not available yet (no live backend).');
+          if (!app.canCommand()) throw new Error('Your ORION role is not allowed to send device commands.');
           step('propose', `Asked you to confirm: ${i.device} ${i.action}`);
           app.confirmCommand(key);
           return 'A confirmation dialog is now shown. The user decides; nothing has run yet. Tell them to confirm or cancel.';

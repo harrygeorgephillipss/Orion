@@ -48,7 +48,7 @@
       <div class="t-val">${r.stale ? '<span class="t-lk">Last known</span>' : ''}<b>${esc(r.big)}</b>${r.unit ? `<i>${esc(r.unit)}</i>` : ''}</div>
       <div class="t-small">${esc(r.small)}</div>
       <div class="t-spark">${sp}</div>
-      <div class="t-foot">${r.stale ? I('clock') : r.status === 'live' ? '<i class="pulse-dot"></i>' : I('info')}<span>${esc(r.foot)}</span>${isSim() ? C.demoTag() : ''}</div>
+      <div class="t-foot">${r.stale ? I('clock') : r.status === 'live' ? '<i class="pulse-dot"></i>' : I('info')}<span>${esc(r.foot)}</span>${isSim() || snap.sensors[t.id].simulated ? C.demoTag() : ''}</div>
     </button>`;
   }
 
@@ -321,7 +321,7 @@
   };
   function outputs(snap, ev) {
     if (!snap.actuators || !snap.actuators.fan) return '<p class="hint">No outputs have reported yet.</p>';
-    const a = snap.actuators, demo = isSim(), gk = R.gatewayKey(snap), live = gk ? ev.controllers[gk].online : false;
+    const a = snap.actuators, demo = isSim(), cmdOK = A().canCommand(), gk = R.gatewayKey(snap), live = gk ? ev.controllers[gk].online : false;
     const busy = (snap.commands || []).find((c) => ['requested', 'queued', 'sent', 'accepted'].includes(c.status));
     const dis = !live || busy ? 'disabled' : '';
     const btn = (act, label) => `<button class="btn sm ghost" data-action="cmd" data-act="${act}" ${dis}>${esc(label)}</button>`;
@@ -330,8 +330,8 @@
     const ledTxt = a.leds.items.map((l) => `${l.name.split(' — ')[0]} ${l.commanded}`).join(' · ');
     const simNote = busy ? '<span class="tag-demo">waiting for last command</span>' : !live ? '<span class="tag-demo">gateway offline</span>' : demo ? '<span class="tag-demo">simulated</span>' : '';
     return [
-      row('fan', 'Exhaust fan', onoff(a.fan.commanded), a.fan.cooldown_remaining_s ? `Keeps running ${a.fan.cooldown_remaining_s} s after smoke clears` : `Last changed ${esc(F.ago(a.fan.last_changed_at))} by ${esc(a.fan.by)}`, demo ? `${btn('fan:on', 'Turn on')}${btn('fan:off', 'Turn off')}${simNote}` : ''),
-      row('bell', 'Buzzer', a.buzzer.commanded === 'on' ? C.chip('crit', 'Sounding') : C.chip('off', 'Quiet'), 'Sounds automatically on smoke — doesn’t need this app', demo ? `${btn('buzzer:test', 'Test 2 s')}${simNote}` : ''),
+      row('fan', 'Exhaust fan', onoff(a.fan.commanded), a.fan.cooldown_remaining_s ? `Keeps running ${a.fan.cooldown_remaining_s} s after smoke clears` : `Last changed ${esc(F.ago(a.fan.last_changed_at))} by ${esc(a.fan.by)}`, cmdOK ? `${btn('fan:on', 'Turn on')}${btn('fan:off', 'Turn off')}${simNote}` : ''),
+      row('bell', 'Buzzer', a.buzzer.commanded === 'on' ? C.chip('crit', 'Sounding') : C.chip('off', 'Quiet'), 'Sounds automatically on smoke — doesn’t need this app', cmdOK ? `${btn('buzzer:test', 'Test 2 s')}${simNote}` : ''),
       row('door', 'Model door (MG995 servo)', a.mg995.target_angle > 0 ? C.chip('warn', `Set to open ${a.mg995.target_angle}°`) : C.chip('off', 'Set to closed'), 'Opens 180° for 5 s on smoke. No manual control — needs a safety review before any real door.', ''),
       row('bulb', 'Lights & LEDs', '', esc(ledTxt), ''),
       row('relay', 'Relay module', C.chip('off', a.relay.channels[0].commanded === 'energised' ? 'Channel 1 on' : 'Channel 1 off'), 'Channel 1 → fan (planned). Wiring and on-level not confirmed yet.', ''),
@@ -365,6 +365,8 @@
       el.innerHTML = `<div class="page-h"><h1>Settings</h1><p>These settings are saved in this browser. Server-side settings (users, alert contacts, device thresholds) arrive with the ORION backend.</p></div>
       <section class="card"><h2>Appearance</h2><div class="set-row"><div><b>Theme</b><span class="hint">Both are designed to be easy on the eyes.</span></div><div class="seg">${[['dark', 'Calm dark', 'moon'], ['light', 'Calm light', 'sun']].map(([v, l, ic]) => `<button class="seg-b${(document.body.dataset.theme || 'dark') === v ? ' on' : ''}" data-action="theme" data-t="${v}" type="button">${I(ic)} ${l}</button>`).join('')}</div></div></section>
       <section class="card"><h2>Data</h2><div class="set-row"><div><b>Data source</b><span class="hint">Simulation is a built-in test mode — every value is invented. Live shows only real data from an ORION server.</span></div><div class="seg" id="cfgMode"></div></div>
+        ${A().mode === 'live' ? `<div class="set-row"><div><b>ORION server</b><span class="hint">Leave empty to use the server this page was opened from.</span></div><div class="row-btns"><input id="c-server" class="inp" placeholder="https://orion.local" value="${esc(U.store.get('orion.server', ''))}" maxlength="200"><button class="btn sm ghost" data-action="server-save" type="button">Save</button></div></div>
+        <div class="set-row"><div><b>Signed in</b><span class="hint">${A().source.user ? esc(A().source.user.name + ' · ' + A().source.user.email + ' · ' + A().source.user.role) : 'Not signed in'}</span></div>${A().source.user ? '<button class="btn sm ghost" data-action="logout" type="button">Sign out</button>' : '<button class="btn sm" data-action="login-open" type="button">Sign in</button>'}</div>` : ''}
         <div class="set-row"><div><b>Simulation scenarios</b><span class="hint">Try smoke, flame, a leak, sensor faults or going offline (simulation only).</span></div><button class="btn sm ghost" data-action="drawer-open"${isSim() ? '' : ' disabled'}>Open</button></div></section>
       <form id="cfg" class="stack">
         <section class="card"><h2>General</h2><div class="fgrid">
@@ -427,7 +429,17 @@
     app.config = c;
     const ok = U.store.set('orion.config.v1', c);
     if (app.source.logs) app.source.logs.unshift({ at: Date.now(), level: 'info', msg: `audit: settings saved by ${app.user.name}${changed ? ' (alert levels changed)' : ''}` });
-    app.toast(ok ? 'Settings saved.' : 'Settings applied for this visit (browser storage unavailable).');
+    if (app.isAdmin() && app.source.putConfig) {
+      // Server-side settings are shared by everyone and drive the server's incident engine.
+      const src = app.source;
+      Promise.all([
+        src.putConfig('freshness', c.freshness), src.putConfig('thresholds', c.thresholds),
+        src.putConfig('rooms', c.rooms), src.putConfig('home', { name: c.home.name, timezone: c.timezone }),
+      ]).then((rs) => {
+        const bad = rs.find((r) => !r.ok);
+        app.toast(bad ? 'Saved in this browser, but the server refused: ' + bad.error : 'Settings saved on the ORION server.', bad ? 'bad' : '');
+      });
+    } else app.toast(ok ? (app.mode === 'live' ? 'Saved in this browser only (server settings need an admin).' : 'Settings saved.') : 'Settings applied for this visit (browser storage unavailable).');
     app.onData();
   }
 

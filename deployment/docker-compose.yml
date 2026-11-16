@@ -1,0 +1,51 @@
+# ORION server stack: PostgreSQL + Mosquitto + backend (+ optional Caddy for HTTPS).
+#   cp .env.example .env   # fill in real values (never commit .env)
+#   python3 scripts/mqtt_passwd.py deployment/mosquitto/passwd orion-backend --from-env ORION_MQTT_PASSWORD
+#   docker compose -f deployment/docker-compose.yml --env-file .env up -d --build
+name: orion
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      retries: 10
+    # not published on the host: only the backend reaches it
+
+  mqtt:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/acl:/mosquitto/config/acl:ro
+      - ./mosquitto/passwd:/mosquitto/config/passwd:ro
+      - mqttdata:/mosquitto/data
+    ports: ["1883:1883"]   # gateways on the LAN connect here; use 8883 + TLS when exposed beyond the LAN
+
+  backend:
+    build: { context: .., dockerfile: backend/Dockerfile }
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+      mqtt: { condition: service_started }
+    env_file: ../.env
+    environment:
+      ORION_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      ORION_MQTT_HOST: mqtt
+    ports: ["127.0.0.1:8000:8000"]   # publish via Caddy below, or change to 8000:8000 on a trusted LAN
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    profiles: ["https"]   # enable with: --profile https
+    ports: ["80:80", "443:443"]
+    volumes: [./Caddyfile:/etc/caddy/Caddyfile:ro, caddydata:/data]
+    depends_on: [backend]
+
+volumes: { pgdata: {}, mqttdata: {}, caddydata: {} }

@@ -439,12 +439,13 @@ details.more>summary::-webkit-details-marker{display:none}
 .vo:not(.kb):not(.typing) .vo-alt{display:none}
 /* listening is shown by the orb's own pulse only — no rings around it */
 .vo-ring{display:none}
+.row-btns input{flex:1;min-width:0;width:auto}
 
 </style>
 </head>
 <body>
 <a class="skip" href="#view">Skip to content</a>
-<div class="demo-bar" id="demoBar" role="note"><span><b>SIMULATION</b> · every value is invented test data — no hardware is connected</span><button class="demo-btn" data-action="drawer-open">Scenario · <span id="scName"></span></button></div>
+<div class="demo-bar" id="demoBar" role="note"><span id="demoTxt"><b>SIMULATION</b> · every value is invented test data — no hardware is connected</span><button class="demo-btn" id="demoBtn" data-action="drawer-open">Scenario · <span id="scName"></span></button></div>
 <header class="hd">
   <a class="brand" href="#home" aria-label="ORION home">
     <svg viewBox="0 0 32 32" width="24" height="24" aria-hidden="true"><circle cx="16" cy="16" r="14.5" fill="none" stroke="currentColor" stroke-opacity=".3"/><circle cx="10" cy="18.5" r="2" fill="currentColor"/><circle cx="16" cy="16" r="2.3" fill="currentColor"/><circle cx="22" cy="13.5" r="2" fill="currentColor"/></svg>
@@ -1342,6 +1343,215 @@ ORION.fmt = (function () {
   ORION.sources = { DemoSource, LiveSource, SCENARIOS, SIM_SENSOR };
 })();
 
+/* ORION live data source: the same adapter interface as the simulation (see sources.js), backed by the ORION server.
+ *
+ *  - REST  /api/v1/...  for the overview snapshot, history, acknowledgements and commands
+ *  - WebSocket /api/v1/ws for real-time events (on any event the overview is re-fetched, debounced)
+ *  - Access token kept in memory only. Browsers keep the refresh token in an httpOnly cookie set by the server;
+ *    the Android app (Phase 5) keeps it in secure storage.
+ *  - When the server can't be reached the snapshot becomes an explicit error — values are never invented or kept
+ *    looking current. A periodic 2 s tick re-evaluates freshness even when no messages arrive.
+ */
+'use strict';
+(function () {
+  const U = ORION.util;
+  const SERVER_KEY = 'orion.server';
+
+  /* Base URL of the ORION server: saved setting, else the page's own origin when served over http(s). */
+  function serverBase() {
+    const saved = U.store.get(SERVER_KEY, '');
+    if (saved) return String(saved).replace(/\/+$/, '');
+    if (/^https?:$/.test(location.protocol)) return location.origin;
+    return '';
+  }
+
+  class LiveSource {
+    constructor() {
+      this.kind = 'live'; this.label = 'Live';
+      this.base = serverBase();
+      this.token = null; this.user = null;
+      this.snap = this.base ? { status: 'loading' } : { status: 'unconfigured', message: 'No ORION server address is set. Add it in Settings → Data, or open ORION from your server.' };
+      this.listeners = []; this.hist = new Map(); this.timer = null; this.ws = null; this.wsBackoff = 1000; this.stopped = false;
+      this.wsState = 'closed'; this._refetchT = null; this._inflight = null;
+    }
+
+    /* ---------- lifecycle ---------- */
+    start(cb) {
+      if (cb) this.listeners.push(cb);
+      this.stopped = false;
+      if (!this.timer) this.timer = setInterval(() => this._emit(), 2000); // freshness re-evaluation
+      if (this.base) this._boot();
+      else this._emit();
+    }
+    stop() {
+      this.stopped = true;
+      clearInterval(this.timer); this.timer = null;
+      if (this.ws) { try { this.ws.close(); } catch (e) { /* closed */ } this.ws = null; }
+    }
+    _emit() { for (const l of this.listeners) { try { l(); } catch (e) { console.error(e); } } }
+
+    async _boot() {
+      const ok = await this._refresh();
+      if (!ok) { if (this.snap.status !== 'error') this.snap = { status: 'auth', message: 'Sign in to see live data.' }; this._emit(); return; }
+      await this._afterAuth();
+    }
+    async _afterAuth() {
+      await Promise.all([this._loadConfig(), this.refetch()]);
+      this._openWs();
+    }
+
+    /* ---------- auth ---------- */
+    async _refresh() {
+      try {
+        const r = await fetch(this.base + '/api/v1/auth/refresh', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        if (!r.ok) return false;
+        this._setAuth(await r.json());
+        return true;
+      } catch (e) {
+        this.snap = { status: 'error', error: { code: 'network', message: 'Cannot reach the ORION server at ' + this.base }, at: Date.now() };
+        return false;
+      }
+    }
+    _setAuth(j) {
+      this.token = j.access_token; this.user = j.user;
+      if (ORION.app) ORION.app.user = { name: j.user.name, role: j.user.role, email: j.user.email };
+    }
+    async login(email, password) {
+      let r;
+      try {
+        r = await fetch(this.base + '/api/v1/auth/login', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password, client: 'web' }) });
+      } catch (e) { return { ok: false, error: 'Cannot reach the ORION server.' }; }
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) return { ok: false, error: j.detail || ('Sign-in failed (' + r.status + ')') };
+      this._setAuth(j);
+      this.snap = { status: 'loading' }; this._emit();
+      await this._afterAuth();
+      return { ok: true, user: j.user };
+    }
+    async logout() {
+      try { await fetch(this.base + '/api/v1/auth/logout', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}' }); } catch (e) { /* offline */ }
+      this.token = null; this.user = null;
+      if (this.ws) { try { this.ws.close(); } catch (e) { /* closed */ } this.ws = null; }
+      this.hist.clear();
+      this.snap = { status: 'auth', message: 'Signed out.' };
+      if (ORION.app) ORION.app.user = { name: 'Signed out', role: 'viewer' };
+      this._emit();
+    }
+
+    /* Authenticated request; on 401 tries one refresh, then reports "sign in". */
+    async api(path, opts) {
+      if (!this.base) return { ok: false, status: 0, data: {}, error: 'No ORION server is configured.' };
+      try { return await this._api(path, opts); } catch (e) {
+        return { ok: false, status: 0, data: {}, error: 'Cannot reach the ORION server.' };
+      }
+    }
+    async _api(path, opts) {
+      const o = Object.assign({ method: 'GET' }, opts || {});
+      const go = () => fetch(this.base + '/api/v1' + path, { method: o.method, credentials: 'include', headers: Object.assign({ 'Content-Type': 'application/json' }, this.token ? { Authorization: 'Bearer ' + this.token } : {}), body: o.body === undefined ? undefined : JSON.stringify(o.body) });
+      let r = await go();
+      if (r.status === 401 && await this._refresh()) r = await go();
+      if (r.status === 401) { this.token = null; this.snap = { status: 'auth', message: 'Your session ended — sign in again.' }; this._emit(); }
+      const j = await r.json().catch(() => ({}));
+      return { ok: r.ok, status: r.status, data: j, error: r.ok ? null : (typeof j.detail === 'string' ? j.detail : 'Request failed (' + r.status + ')') };
+    }
+
+    /* ---------- data ---------- */
+    refetch() {
+      if (this._inflight) return this._inflight;
+      this._inflight = (async () => {
+        try {
+          const r = await this.api('/overview');
+          if (r.ok) this.snap = r.data;
+          else if (r.status === 0 && !this.base) this.snap = { status: 'unconfigured', message: r.error };
+          else if (r.status !== 401) this.snap = { status: 'error', error: { code: r.status, message: 'GET /api/v1/overview failed: ' + r.error }, at: Date.now() };
+        } catch (e) {
+          this.snap = { status: 'error', error: { code: 'network', message: 'Lost connection to the ORION server' }, at: Date.now() };
+        } finally { this._inflight = null; }
+        this._emit();
+      })();
+      return this._inflight;
+    }
+    _soon() { clearTimeout(this._refetchT); this._refetchT = setTimeout(() => this.refetch(), 250); }
+    async _loadConfig() {
+      const r = await this.api('/config').catch(() => null);
+      if (!r || !r.ok || !ORION.app) return;
+      const c = ORION.app.config, v = (k) => r.data[k] && r.data[k].value;
+      if (v('freshness')) c.freshness = Object.assign({}, c.freshness, v('freshness'));
+      if (v('thresholds')) c.thresholds = Object.assign({}, c.thresholds, v('thresholds'));
+      if (v('rooms')) c.rooms = Object.assign({}, c.rooms, v('rooms'));
+      if (v('home')) { c.home = Object.assign({}, c.home, { name: v('home').name }); c.timezone = v('home').timezone || c.timezone; }
+      this.serverConfig = r.data;
+    }
+
+    _openWs() {
+      if (this.stopped || !this.token || this.ws) return;
+      const url = this.base.replace(/^http/, 'ws') + '/api/v1/ws';
+      let ws;
+      try { ws = new WebSocket(url); } catch (e) { return this._wsRetry(); }
+      this.ws = ws; this.wsState = 'connecting';
+      ws.onopen = () => ws.send(JSON.stringify({ type: 'auth', token: this.token }));
+      ws.onmessage = (ev) => {
+        let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+        if (m.type === 'ready') { this.wsState = 'open'; this.wsBackoff = 1000; this.refetch(); return; }
+        if (m.type === 'tick') return;
+        if (m.type === 'incident_opened' && ORION.app && ORION.app.toast) {
+          ORION.app.toast((m.simulated ? '[Simulated] ' : '') + 'New alert: ' + (m.source || m.incident_type) + ' (' + String(m.severity).toUpperCase() + ')', m.severity === 'critical' ? 'bad' : '');
+        }
+        this._soon();
+      };
+      ws.onclose = (ev) => {
+        this.ws = null; this.wsState = 'closed';
+        if (ev.code === 4401 && !this.stopped) { this._refresh().then((ok) => { if (ok) this._openWs(); }); return; }
+        this._wsRetry();
+      };
+      ws.onerror = () => { /* onclose follows */ };
+    }
+    _wsRetry() {
+      if (this.stopped) return;
+      this.refetch(); // shows OFFLINE/error state promptly if the server is gone
+      setTimeout(() => this._openWs(), this.wsBackoff);
+      this.wsBackoff = Math.min(this.wsBackoff * 2, 30000);
+    }
+
+    snapshot() { return this.snap; }
+
+    /* Synchronous for the UI: returns cached points and fetches in the background, then re-renders. */
+    history(key, from, to) {
+      if (!this.token || !key) return [];
+      const span = Math.round((to - from) / 60e3);
+      const ck = key + '|' + span;
+      const c = this.hist.get(ck);
+      const now = Date.now();
+      if (!c || (now - c.at > 15000 && !c.loading)) {
+        const entry = c || { at: 0, pts: [] };
+        entry.loading = true; this.hist.set(ck, entry);
+        const q = '/telemetry?series=' + encodeURIComponent(key) + '&from=' + Math.floor(from) + '&to=' + Math.ceil(to) + '&max_points=' + (span > 1440 ? 1500 : 2000);
+        this.api(q).then((r) => { entry.loading = false; entry.at = Date.now(); if (r.ok) { entry.pts = r.data.points; this._emit(); } }, () => { entry.loading = false; entry.at = Date.now(); });
+      }
+      return (c ? c.pts : []).filter((p) => p.t >= from && p.t <= to);
+    }
+
+    async acknowledge(id) {
+      const r = await this.api('/incidents/' + encodeURIComponent(id) + '/ack', { method: 'POST' });
+      if (r.ok) this.refetch();
+      return { ok: r.ok, error: r.error };
+    }
+    async command({ actuator, action }) {
+      const r = await this.api('/commands', { method: 'POST', body: { actuator, action } });
+      this.refetch();
+      if (!r.ok) return { ok: false, error: r.error };
+      if (r.data.status === 'failed') return { ok: false, error: r.data.history[r.data.history.length - 1].note, command: r.data };
+      return { ok: true, command: r.data };
+    }
+    async putConfig(key, value) { return this.api('/config/' + key, { method: 'PUT', body: value }); }
+    setScenario() { /* simulation only */ }
+  }
+
+  LiveSource.serverBase = serverBase;
+  LiveSource.SERVER_KEY = SERVER_KEY;
+  ORION.sources.LiveSource = LiveSource;
+})();
+
 /* ORION health evaluation: freshness, sensor status and overall system state.
  * Precedence: OFFLINE (no valid controller link) > EMERGENCY > ATTENTION > DEGRADED > NORMAL.
  * A degraded condition never hides an emergency; stale/missing data never shows NORMAL.
@@ -1362,7 +1572,8 @@ ORION.fmt = (function () {
     const fresh = cfg.freshness.sensor_s * 1000, hb = cfg.freshness.heartbeat_s * 1000;
     for (const [k, c] of Object.entries(snap.controllers || {})) {
       const age = c.last_seen_at == null ? Infinity : now - c.last_seen_at;
-      out.controllers[k] = { online: age <= hb, age };
+      // `connected: false` = the server knows the link dropped (MQTT last-will / UNO link loss) — offline now.
+      out.controllers[k] = { online: age <= hb && c.connected !== false, age, disconnected: c.connected === false };
     }
     const sensors = R.sensorList(snap);
     for (const s of sensors) {
@@ -1408,7 +1619,10 @@ ORION.fmt = (function () {
     const gatewayDown = gk ? !out.controllers[gk].online : (ctrls.length === 0 || ctrls.every((c) => !c.online));
     if (gatewayDown) {
       out.system = 'OFFLINE';
-      const who = gk ? `${snap.controllers[gk].name} gateway heartbeat missing for ${secs(out.controllers[gk].age)}` : 'no controller heartbeat';
+      const g = gk ? out.controllers[gk] : null;
+      const who = !gk ? 'no controller heartbeat'
+        : g.disconnected ? `${snap.controllers[gk].name} gateway disconnected (last heard ${secs(g.age)} ago)`
+          : `${snap.controllers[gk].name} gateway heartbeat missing for ${secs(g.age)}`;
       out.reasons.push(`No valid controller connection: ${who}. All values below are last-known and stale.`);
       if (hazards.length) out.lastKnown = crit ? 'EMERGENCY' : 'ATTENTION';
       out.notes = degraded;
@@ -2166,7 +2380,7 @@ ORION.fmt = (function () {
         execute(i) {
           const key = `${i.device}:${i.action}`;
           if (!['fan:on', 'fan:off', 'buzzer:test'].includes(key)) throw new Error('Not allowed. Only fan on/off and buzzer test can be proposed; the door, mist maker and SG90 are disabled pending safety decisions.');
-          if (app.mode !== 'demo') throw new Error('Device control is not available yet (no live backend).');
+          if (!app.canCommand()) throw new Error('Your ORION role is not allowed to send device commands.');
           step('propose', `Asked you to confirm: ${i.device} ${i.action}`);
           app.confirmCommand(key);
           return 'A confirmation dialog is now shown. The user decides; nothing has run yet. Tell them to confirm or cancel.';
@@ -2943,7 +3157,7 @@ ORION.fmt = (function () {
       <div class="t-val">${r.stale ? '<span class="t-lk">Last known</span>' : ''}<b>${esc(r.big)}</b>${r.unit ? `<i>${esc(r.unit)}</i>` : ''}</div>
       <div class="t-small">${esc(r.small)}</div>
       <div class="t-spark">${sp}</div>
-      <div class="t-foot">${r.stale ? I('clock') : r.status === 'live' ? '<i class="pulse-dot"></i>' : I('info')}<span>${esc(r.foot)}</span>${isSim() ? C.demoTag() : ''}</div>
+      <div class="t-foot">${r.stale ? I('clock') : r.status === 'live' ? '<i class="pulse-dot"></i>' : I('info')}<span>${esc(r.foot)}</span>${isSim() || snap.sensors[t.id].simulated ? C.demoTag() : ''}</div>
     </button>`;
   }
 
@@ -3216,7 +3430,7 @@ ORION.fmt = (function () {
   };
   function outputs(snap, ev) {
     if (!snap.actuators || !snap.actuators.fan) return '<p class="hint">No outputs have reported yet.</p>';
-    const a = snap.actuators, demo = isSim(), gk = R.gatewayKey(snap), live = gk ? ev.controllers[gk].online : false;
+    const a = snap.actuators, demo = isSim(), cmdOK = A().canCommand(), gk = R.gatewayKey(snap), live = gk ? ev.controllers[gk].online : false;
     const busy = (snap.commands || []).find((c) => ['requested', 'queued', 'sent', 'accepted'].includes(c.status));
     const dis = !live || busy ? 'disabled' : '';
     const btn = (act, label) => `<button class="btn sm ghost" data-action="cmd" data-act="${act}" ${dis}>${esc(label)}</button>`;
@@ -3225,8 +3439,8 @@ ORION.fmt = (function () {
     const ledTxt = a.leds.items.map((l) => `${l.name.split(' — ')[0]} ${l.commanded}`).join(' · ');
     const simNote = busy ? '<span class="tag-demo">waiting for last command</span>' : !live ? '<span class="tag-demo">gateway offline</span>' : demo ? '<span class="tag-demo">simulated</span>' : '';
     return [
-      row('fan', 'Exhaust fan', onoff(a.fan.commanded), a.fan.cooldown_remaining_s ? `Keeps running ${a.fan.cooldown_remaining_s} s after smoke clears` : `Last changed ${esc(F.ago(a.fan.last_changed_at))} by ${esc(a.fan.by)}`, demo ? `${btn('fan:on', 'Turn on')}${btn('fan:off', 'Turn off')}${simNote}` : ''),
-      row('bell', 'Buzzer', a.buzzer.commanded === 'on' ? C.chip('crit', 'Sounding') : C.chip('off', 'Quiet'), 'Sounds automatically on smoke — doesn’t need this app', demo ? `${btn('buzzer:test', 'Test 2 s')}${simNote}` : ''),
+      row('fan', 'Exhaust fan', onoff(a.fan.commanded), a.fan.cooldown_remaining_s ? `Keeps running ${a.fan.cooldown_remaining_s} s after smoke clears` : `Last changed ${esc(F.ago(a.fan.last_changed_at))} by ${esc(a.fan.by)}`, cmdOK ? `${btn('fan:on', 'Turn on')}${btn('fan:off', 'Turn off')}${simNote}` : ''),
+      row('bell', 'Buzzer', a.buzzer.commanded === 'on' ? C.chip('crit', 'Sounding') : C.chip('off', 'Quiet'), 'Sounds automatically on smoke — doesn’t need this app', cmdOK ? `${btn('buzzer:test', 'Test 2 s')}${simNote}` : ''),
       row('door', 'Model door (MG995 servo)', a.mg995.target_angle > 0 ? C.chip('warn', `Set to open ${a.mg995.target_angle}°`) : C.chip('off', 'Set to closed'), 'Opens 180° for 5 s on smoke. No manual control — needs a safety review before any real door.', ''),
       row('bulb', 'Lights & LEDs', '', esc(ledTxt), ''),
       row('relay', 'Relay module', C.chip('off', a.relay.channels[0].commanded === 'energised' ? 'Channel 1 on' : 'Channel 1 off'), 'Channel 1 → fan (planned). Wiring and on-level not confirmed yet.', ''),
@@ -3260,6 +3474,8 @@ ORION.fmt = (function () {
       el.innerHTML = `<div class="page-h"><h1>Settings</h1><p>These settings are saved in this browser. Server-side settings (users, alert contacts, device thresholds) arrive with the ORION backend.</p></div>
       <section class="card"><h2>Appearance</h2><div class="set-row"><div><b>Theme</b><span class="hint">Both are designed to be easy on the eyes.</span></div><div class="seg">${[['dark', 'Calm dark', 'moon'], ['light', 'Calm light', 'sun']].map(([v, l, ic]) => `<button class="seg-b${(document.body.dataset.theme || 'dark') === v ? ' on' : ''}" data-action="theme" data-t="${v}" type="button">${I(ic)} ${l}</button>`).join('')}</div></div></section>
       <section class="card"><h2>Data</h2><div class="set-row"><div><b>Data source</b><span class="hint">Simulation is a built-in test mode — every value is invented. Live shows only real data from an ORION server.</span></div><div class="seg" id="cfgMode"></div></div>
+        ${A().mode === 'live' ? `<div class="set-row"><div><b>ORION server</b><span class="hint">Leave empty to use the server this page was opened from.</span></div><div class="row-btns"><input id="c-server" class="inp" placeholder="https://orion.local" value="${esc(U.store.get('orion.server', ''))}" maxlength="200"><button class="btn sm ghost" data-action="server-save" type="button">Save</button></div></div>
+        <div class="set-row"><div><b>Signed in</b><span class="hint">${A().source.user ? esc(A().source.user.name + ' · ' + A().source.user.email + ' · ' + A().source.user.role) : 'Not signed in'}</span></div>${A().source.user ? '<button class="btn sm ghost" data-action="logout" type="button">Sign out</button>' : '<button class="btn sm" data-action="login-open" type="button">Sign in</button>'}</div>` : ''}
         <div class="set-row"><div><b>Simulation scenarios</b><span class="hint">Try smoke, flame, a leak, sensor faults or going offline (simulation only).</span></div><button class="btn sm ghost" data-action="drawer-open"${isSim() ? '' : ' disabled'}>Open</button></div></section>
       <form id="cfg" class="stack">
         <section class="card"><h2>General</h2><div class="fgrid">
@@ -3322,7 +3538,17 @@ ORION.fmt = (function () {
     app.config = c;
     const ok = U.store.set('orion.config.v1', c);
     if (app.source.logs) app.source.logs.unshift({ at: Date.now(), level: 'info', msg: `audit: settings saved by ${app.user.name}${changed ? ' (alert levels changed)' : ''}` });
-    app.toast(ok ? 'Settings saved.' : 'Settings applied for this visit (browser storage unavailable).');
+    if (app.isAdmin() && app.source.putConfig) {
+      // Server-side settings are shared by everyone and drive the server's incident engine.
+      const src = app.source;
+      Promise.all([
+        src.putConfig('freshness', c.freshness), src.putConfig('thresholds', c.thresholds),
+        src.putConfig('rooms', c.rooms), src.putConfig('home', { name: c.home.name, timezone: c.timezone }),
+      ]).then((rs) => {
+        const bad = rs.find((r) => !r.ok);
+        app.toast(bad ? 'Saved in this browser, but the server refused: ' + bad.error : 'Settings saved on the ORION server.', bad ? 'bad' : '');
+      });
+    } else app.toast(ok ? (app.mode === 'live' ? 'Saved in this browser only (server settings need an admin).' : 'Settings saved.') : 'Settings applied for this visit (browser storage unavailable).');
     app.onData();
   }
 
@@ -3373,12 +3599,17 @@ ORION.fmt = (function () {
   app.setSource = function (mode) {
     if (this.source) this.source.stop();
     this.mode = mode;
+    U.store.set('orion.mode', mode);
     this.source = mode === 'demo' ? (this._demo || (this._demo = new ORION.sources.DemoSource())) : new ORION.sources.LiveSource();
+    this.user = mode === 'demo' ? { name: 'Simulation user', role: 'owner' } : { name: 'Not signed in', role: 'viewer' };
     this.source.listeners = [];
     this.source.start(() => this.onData());
     if (mode === 'live') this.onData();
     renderChrome();
   };
+  /* Who may send device commands: anyone in simulation; member or higher on a live server. */
+  app.canCommand = function () { return this.mode === 'demo' || ['owner', 'admin', 'member'].includes(this.user.role); };
+  app.isAdmin = function () { return this.mode === 'live' && ['owner', 'admin'].includes(this.user.role); };
 
   app.onData = function () {
     this.ui.tick++;
@@ -3469,6 +3700,18 @@ ORION.fmt = (function () {
     const n = app.snap.incidents ? app.snap.incidents.filter((i) => i.state !== 'cleared' && (i.severity === 'critical' || i.severity === 'warning')).length : 0;
     document.querySelectorAll('[data-r="alerts"]').forEach((a) => { let b = a.querySelector('.cnt'); if (n) { if (!b) { b = document.createElement('b'); b.className = 'cnt'; a.appendChild(b); } b.textContent = n; } else if (b) b.remove(); });
     document.body.dataset.sys = ev.system;
+    // Live server with simulated devices registered: say so on every page.
+    const simDevices = app.mode === 'live' && app.snap && app.snap.contains_simulated;
+    const bar = document.getElementById('demoBar');
+    if (bar) {
+      const want = app.mode === 'demo' || !!simDevices;
+      if (bar.hidden === want) bar.hidden = !want;
+      const txt = app.mode === 'demo' ? '<b>SIMULATION</b> · every value is invented test data — no hardware is connected'
+        : app.snap.simulated ? '<b>SIMULATED DEVICES</b> · this server is receiving data from a device simulator, not hardware'
+          : '<b>INCLUDES SIMULATED DEVICES</b> · values tagged “simulated” are not hardware readings';
+      const tEl = document.getElementById('demoTxt'); if (tEl && tEl._h !== txt) { tEl.innerHTML = txt; tEl._h = txt; }
+      const b = document.getElementById('demoBtn'); if (b) b.hidden = app.mode !== 'demo';
+    }
     const sc = document.getElementById('scName');
     if (sc && app.mode === 'demo') { const s = ORION.sources.SCENARIOS.find((x) => x.id === app.source.scenario); sc.textContent = s ? s.label : ''; }
   }
@@ -3500,6 +3743,26 @@ ORION.fmt = (function () {
     openModal(`<h2 id="md-t">${esc(title)}</h2>${body}`, { actions: `<button class="btn ghost" data-action="md-cancel">Cancel</button><button class="btn ${danger ? 'danger' : ''}" id="md-ok">${esc(confirm)}</button>`, focus: '#md-ok' });
     document.getElementById('md-ok').onclick = () => { closeModal(); onConfirm(); };
   }
+  /* Sign-in dialog (live mode). The password is sent only to the ORION server, over HTTPS in production. */
+  function loginBox() {
+    if (app.mode !== 'live' || !app.source.login) return;
+    app._sheet = null;
+    openModal(`<h2 id="md-t">Sign in to ORION</h2><p class="hint">Server: ${esc(app.source.base || '—')}</p>
+      <form id="login-f" class="stack" autocomplete="on"><label class="fld"><span>Email</span><input id="lg-e" type="email" autocomplete="username" required maxlength="254"></label>
+      <label class="fld"><span>Password</span><input id="lg-p" type="password" autocomplete="current-password" required maxlength="200"></label>
+      <div id="lg-err" class="note crit" hidden></div><div class="row-btns"><button class="btn" type="submit" id="lg-go">Sign in</button></div></form>`, { focus: '#lg-e' });
+    document.getElementById('login-f').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('lg-go'), err = document.getElementById('lg-err');
+      btn.disabled = true; err.hidden = true;
+      app.source.login(document.getElementById('lg-e').value.trim(), document.getElementById('lg-p').value).then((r) => {
+        btn.disabled = false;
+        if (r.ok) { closeModal(); app.toast('Signed in as ' + r.user.name + ' (' + r.user.role + ').'); app.mountView(); }
+        else { err.hidden = false; err.textContent = r.error; }
+      });
+    });
+  }
+
   app.sheet = function (key, render, live) {
     this._sheet = { key, render, live: !!live };
     const inner = render();
@@ -3530,8 +3793,19 @@ ORION.fmt = (function () {
       confirmBox({
         title: 'Mark this alert as seen?', confirm: 'Mark as seen',
         body: `<p><b>${esc(C.incidentSentence(inc))}</b><br><span class="hint">Started ${esc(F.dt(inc.opened_at))}</span></p><p>This only records that you know about it. It <b>won’t</b> stop the buzzer or end the alert — that happens by itself when the sensor reads normal again.</p>`,
-        onConfirm() { const r = app.source.acknowledge(inc.id, app.user.name); app.toast(r.ok ? 'Marked as seen. The alert stays until the sensor reads normal.' : 'Couldn’t save: ' + r.error, r.ok ? '' : 'bad'); app.onData(); },
+        onConfirm() {
+          Promise.resolve().then(() => app.source.acknowledge(inc.id, app.user.name)).then((r) => {
+            app.toast(r && r.ok ? 'Marked as seen. The alert stays until the sensor reads normal.' : 'Couldn’t save: ' + ((r && r.error) || 'no response'), r && r.ok ? '' : 'bad'); app.onData();
+          });
+        },
       });
+    } else if (a === 'login-open') loginBox();
+    else if (a === 'logout') { if (app.source.logout) app.source.logout().then(() => { app.toast('Signed out.'); app.mountView(); }); }
+    else if (a === 'server-save') {
+      const i = document.getElementById('c-server'); const v = i ? i.value.trim() : '';
+      if (v && !/^https?:\/\/[^\s]+$/i.test(v)) { app.toast('Server address must start with http:// or https://', 'bad'); return; }
+      U.store.set(ORION.sources.LiveSource.SERVER_KEY, v.replace(/\/+$/, ''));
+      app.setSource('live'); app.mountView(); app.toast(v ? 'Server address saved.' : 'Using this page’s own server.');
     } else if (a === 'cmd') app.confirmCommand(t.dataset.act);
     else if (a === 'aura-open') { if (panelOpen()) closePanel(); else openPanel(); }
     else if (a === 'aura-close') closePanel();
@@ -3575,7 +3849,9 @@ ORION.fmt = (function () {
     window.addEventListener('hashchange', route);
     let rz, lastW = window.innerWidth;
     window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (Math.abs(window.innerWidth - lastW) > 40 && ['home', 'history'].includes(app.route)) { lastW = window.innerWidth; app.mountView(); } }, 250); });
-    app.setSource('demo');
+    // Served by an ORION server → live data by default; opened as a local file → simulation. The choice is remembered.
+    const saved = U.store.get('orion.mode', null);
+    app.setSource(saved === 'demo' || saved === 'live' ? saved : (/^https?:$/.test(location.protocol) ? 'live' : 'demo'));
     route();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();

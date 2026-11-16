@@ -1,0 +1,18 @@
+{
+  "id": "esp32-sim",
+  "name": "ESP32 (simulator)",
+  "simulated": true,
+  "gsm_module_id": "gsm-sim",
+  "controllers": [
+    {
+      "id": "uno-sim",
+      "name": "Arduino UNO (simulator)",
+      "sensors": [
+        { "id": "mq2-sim", "type": "mq2", "label": "MQ-2 smoke / gas", "room": "Hall" },
+        { "id": "flame-sim", "type": "flame", "label": "Flame sensor", "room": "Kitchen" },
+        { "id": "water-sim", "type": "water", "label": "Water sensor", "room": "Utility area" },
+        { "id": "dht-sim", "type": "dht22", "label": "DHT22 temperature / humidity", "room": "Living room" }
+      ]
+    }
+  ]
+}
