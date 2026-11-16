@@ -12,7 +12,7 @@
 | Android build | `cd android && npm ci && npm run build:debug` | JDK 21, Android SDK 35 |
 | Settings system test (contacts → gateway → SMS, people, devices, audit) | `node --test tests/system/settings.system.test.js` (same env as below, owner account) | server + simulator |
 | Aura system test | `node --test tests/system/aura.system.test.js` (same env as below, server with `AURA_PROVIDER=mock`) | server |
-| Backend (55) | `cd backend && pytest` | PostgreSQL with an `orion_test` database (`ORION_DATABASE_URL` to override); the MQTT test also needs an anonymous dev broker on localhost:1883 (skipped otherwise) |
+| Backend (57) | `cd backend && pytest` | PostgreSQL with an `orion_test` database (`ORION_DATABASE_URL` to override); the MQTT test also needs an anonymous dev broker on localhost:1883 (skipped otherwise) |
 | Full-stack system test | see below | server + broker + simulator |
 
 ### Full-stack system test
@@ -44,7 +44,7 @@ PostgreSQL 16, Mosquitto 2.1.2, headless Chromium (Playwright).
 | Frontend unit | **27 / 27 passed** |
 | Frontend e2e (390 / 768 / 1280 px + Android bridge) | **18 / 18 passed** |
 | Settings system test | **6 / 6** — a contact added in the app reached the (simulated) gateway and the flame SMS went to it |
-| Backend pytest | **56 / 56 passed** (incl. real-broker round trip, Aura, push) |
+| Backend pytest | **57 tests: 57 passed** (MQTT round-trip needs an anonymous dev broker) (incl. real-broker round trip, Aura, push) |
 | Firmware host tests (ASan + UBSan) | **20 tests / 101 checks passed** |
 | Firmware builds | UNO and ESP32 compile with 0 warnings |
 | Android | debug APK builds (4.9 MB) |

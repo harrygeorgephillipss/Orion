@@ -238,3 +238,24 @@ async def test_unknown_reading_fields_are_dropped(gateway, db):
     await send("telemetry", {"seq": nxt(), "controller": "uno-test", "readings": [reading("mq2-1", {"raw_adc": 200, "junk": "x" * 5000, "nested": {"a": 1}})]})
     f = await fresh(Sensor, "mq2-1", lambda s: s.fields)
     assert f == {"raw_adc": 200}
+
+
+async def test_registration_maintains_broker_password_file(client, auth, tmp_path):
+    import base64
+    import hashlib
+
+    from app.config import get_settings
+
+    st = get_settings()
+    st.mqtt_passwd_file = str(tmp_path / "passwd")
+    try:
+        r = await client.post("/api/v1/devices/gateways", json={"id": "gw-file"}, headers=auth["admin"])
+        assert r.status_code == 201 and r.json()["broker_account_created"] is True
+        line = (tmp_path / "passwd").read_text().strip()
+        user, _, it, salt, dk = line.split("$")
+        assert user == "gw-file:" and it == "101"
+        assert base64.b64decode(dk) == hashlib.pbkdf2_hmac("sha512", r.json()["mqtt"]["password"].encode(), base64.b64decode(salt), 101)
+        assert (await client.delete("/api/v1/devices/gw-file", headers=auth["owner"])).status_code == 200
+        assert (tmp_path / "passwd").read_text() == ""
+    finally:
+        st.mqtt_passwd_file = ""

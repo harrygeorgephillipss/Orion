@@ -9,8 +9,8 @@ The same app runs in a browser (served by your ORION server) and on Android (the
 2. Open the server address in a browser — or, in the Android app, type the address on the first screen and tap
    **Connect** — then **Sign in**.
 3. **Settings → Registered devices → Register a gateway**: keep the suggested ids (or change them), tap Register,
-   and **copy the broker password** (shown once). Add it to the broker and to the ESP32's `secrets.h`
-   (the page shows the exact command).
+   and **copy the broker password** (shown once) into the ESP32's `secrets.h`. With the Docker setup the broker
+   account is created for you.
 4. **Settings → Emergency contacts**: add the people who should get SMS/calls. The gateway receives the list
    automatically and keeps it, so alerts work even without internet.
 5. **Settings → People**: add family members. Roles: *viewer* (see only), *member* (acknowledge alerts, fan and

@@ -1,6 +1,5 @@
 # ORION server stack: PostgreSQL + Mosquitto + backend (+ optional Caddy for HTTPS).
-#   cp .env.example .env   # fill in real values (never commit .env)
-#   python3 scripts/mqtt_passwd.py deployment/mosquitto/passwd orion-backend --from-env ORION_MQTT_PASSWORD
+#   python3 scripts/setup.py          # writes .env with strong random secrets (never commit .env)
 #   docker compose -f deployment/docker-compose.yml --env-file .env up -d --build
 name: orion
 services:
@@ -24,9 +23,10 @@ services:
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ./mosquitto/acl:/mosquitto/config/acl:ro
-      - ./mosquitto/passwd:/run/orion/passwd:ro   # host file is 0600; copied in below with the broker's own owner
+      - ./mosquitto/entrypoint.sh:/orion-entrypoint.sh:ro
+      - mqttauth:/run/orion-auth            # broker accounts, maintained by the backend
       - mqttdata:/mosquitto/data
-    entrypoint: ["sh", "-c", "install -o mosquitto -g mosquitto -m 600 /run/orion/passwd /mosquitto/config/passwd && exec /docker-entrypoint.sh /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf"]
+    entrypoint: ["sh", "/orion-entrypoint.sh"]
     ports: ["1883:1883"]   # gateways on the LAN connect here; use 8883 + TLS when exposed beyond the LAN
 
   backend:
@@ -39,6 +39,8 @@ services:
     environment:
       ORION_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       ORION_MQTT_HOST: mqtt
+      ORION_MQTT_PASSWD_FILE: /run/orion-auth/passwd
+    volumes: [mqttauth:/run/orion-auth]
     ports: ["127.0.0.1:8000:8000"]   # publish via Caddy below, or change to 8000:8000 on a trusted LAN
 
   caddy:
@@ -49,4 +51,4 @@ services:
     volumes: [./Caddyfile:/etc/caddy/Caddyfile:ro, caddydata:/data]
     depends_on: [backend]
 
-volumes: { pgdata: {}, mqttdata: {}, caddydata: {} }
+volumes: { pgdata: {}, mqttdata: {}, mqttauth: {}, caddydata: {} }

@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     mqtt_username: str = ""
     mqtt_password: str = ""
     mqtt_topic_root: str = "orion"
+    mqtt_passwd_file: str = ""  # if set, the server maintains broker accounts for gateways (and itself)
 
     home_id: str = "home-1"
     frontend_dir: str = ""

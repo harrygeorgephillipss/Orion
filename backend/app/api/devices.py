@@ -14,6 +14,7 @@ from ..config import get_settings
 from ..deps import client_ip, current_user, db_session, require_role
 from ..models import Device, DeviceKind, GsmModule, Role, Sensor, User
 from ..security import new_device_secret
+from ..services import broker_users
 from ..services.snapshot import device_dict, sensor_dict
 
 router = APIRouter(prefix="/devices", tags=["devices"])
@@ -90,8 +91,9 @@ async def register_gateway(body: GatewayIn, request: Request, actor: User = Depe
     audit(db, "user", actor.id, "device.register", gw.id, {"simulated": body.simulated, "controllers": [c.id for c in body.controllers]}, client_ip(request))
     await db.commit()
     root = st.mqtt_topic_root
+    added = broker_users.upsert(gw.id, secret)
     return {
-        "gateway_id": gw.id, "home_id": st.home_id, "simulated": body.simulated,
+        "gateway_id": gw.id, "home_id": st.home_id, "simulated": body.simulated, "broker_account_created": added,
         # Shown ONCE. Configure it on the broker (scripts/mqtt_passwd.py) and in the gateway firmware.
         "mqtt": {"username": gw.id, "password": secret, "publish": f"{root}/{st.home_id}/{gw.id}/+", "subscribe": f"{root}/{st.home_id}/{gw.id}/cmd"},
     }
@@ -108,4 +110,6 @@ async def delete_device(device_id: str, request: Request, actor: User = Depends(
     await db.delete(d)
     audit(db, "user", actor.id, "device.delete", device_id, {"children": [c.id for c in children]}, client_ip(request))
     await db.commit()
+    if d.kind == DeviceKind.gateway:
+        broker_users.remove(device_id)
     return {"ok": True}

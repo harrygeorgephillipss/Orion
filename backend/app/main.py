@@ -65,6 +65,10 @@ async def monitor() -> None:
 async def lifespan(app: FastAPI):
     st = get_settings()
     await bootstrap_owner()
+    if st.mqtt_passwd_file and st.mqtt_username and st.mqtt_password:
+        from .services import broker_users
+
+        broker_users.upsert(st.mqtt_username, st.mqtt_password)  # the broker picks it up within seconds
     tasks = [asyncio.create_task(monitor(), name="monitor"), asyncio.create_task(dispatcher.run(), name="push")]
     if st.mqtt_enabled:
         tasks.append(asyncio.create_task(mqtt.run(), name="mqtt"))

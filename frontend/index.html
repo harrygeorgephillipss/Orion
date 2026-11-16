@@ -3432,7 +3432,7 @@ ORION.fmt = (function () {
         out.closest('details').open = true;
         out.innerHTML = `<div class="note" role="status"><b>Registered ${esc(r.data.gateway_id)}.</b> Copy the broker password now — it is not shown again.
           ${C.kv([['MQTT username', m.username], ['MQTT password', `<span class="mono" data-secret>${esc(m.password)}</span> <button class="btn sm ghost" data-la="copy" type="button">Copy</button>`, true]])}
-          <p class="hint">Next: add it to the broker (<span class="mono">python3 scripts/mqtt_passwd.py deployment/mosquitto/passwd ${esc(m.username)}</span>, then restart the broker) and put it in the ESP32's <span class="mono">secrets.h</span> as MQTT_PASSWORD.</p></div>`;
+          <p class="hint">${r.data.broker_account_created ? 'The broker account was created automatically. Next: put this password in the ESP32’s <span class="mono">secrets.h</span> as MQTT_PASSWORD and flash it.' : `Next: add it to the broker (<span class="mono">python3 scripts/mqtt_passwd.py deployment/mosquitto/passwd ${esc(m.username)}</span>, then restart the broker) and put it in the ESP32’s <span class="mono">secrets.h</span> as MQTT_PASSWORD.`}</p></div>`;
       }
       if (A().source.refetch) A().source.refetch();
     }

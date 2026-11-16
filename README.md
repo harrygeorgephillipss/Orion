@@ -41,11 +41,7 @@ docs/       audit & plan, architecture, API, security, testing, deployment, limi
 **2. Full stack on one machine (with the device simulator):** see [docs/BACKEND.md](docs/BACKEND.md). In short:
 
 ```bash
-cp .env.example .env    # then edit every value
-```
-
-```bash
-python3 scripts/mqtt_passwd.py deployment/mosquitto/passwd orion-backend --from-env ORION_MQTT_PASSWORD
+python3 scripts/setup.py    # creates .env with random secrets and your owner account
 ```
 
 ```bash
@@ -62,7 +58,7 @@ cd frontend && npm ci && npm run check          # lint + 27 unit + 18 browser e2
 ```
 
 ```bash
-cd backend && pip install -r requirements-dev.txt && pytest   # 56 tests, needs PostgreSQL (and Mosquitto for 1 test)
+cd backend && pip install -r requirements-dev.txt && pytest   # 57 tests, needs PostgreSQL (and Mosquitto for 1 test)
 ```
 
 ```bash

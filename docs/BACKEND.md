@@ -4,22 +4,23 @@ Python 3.12+ (tested on 3.12 in the Docker image and 3.13 locally), PostgreSQL 1
 
 ## Option A — Docker Compose (recommended)
 
-1. Copy `.env.example` to `.env` and replace **every** placeholder. Generate the JWT key with
-   `python3 -c "import secrets;print(secrets.token_hex(32))"`. Set `ORION_ENV=production` for anything beyond your laptop.
-2. Create the broker password file (hashes only; the file is git-ignored):
+1. Create `.env` with strong random secrets and your owner account:
 
    ```bash
-   python3 scripts/mqtt_passwd.py deployment/mosquitto/passwd orion-backend --from-env ORION_MQTT_PASSWORD
+   python3 scripts/setup.py --server-url https://your-server-address
    ```
 
-3. Start:
+   (It asks for the owner email and password. Add `AURA_*` and `FCM_*` values to `.env` later if you want them.)
+2. Start:
 
    ```bash
    docker compose -f deployment/docker-compose.yml --env-file .env up -d --build
    ```
 
    The backend runs `alembic upgrade head` on start, creates the owner from `ORION_BOOTSTRAP_OWNER_*` if no users
-   exist, and serves the web app at `/` (port 8000 on 127.0.0.1; put Caddy in front for HTTPS — `--profile https`).
+   exist, creates its own broker account, and serves the web app at `/` (port 8000 on 127.0.0.1; put Caddy in front
+   for HTTPS — `--profile https`). **Broker accounts are automatic in this setup:** the server writes Mosquitto's
+   password file (shared volume) and the broker reloads it within seconds.
 
 ## Option B — local development
 
@@ -74,14 +75,9 @@ All variables are listed with placeholders in `/.env.example`. Server-side setti
 
 ## Registering devices
 
-`POST /api/v1/devices/gateways` (admin) registers an ESP32 gateway together with its controller(s), sensors and GSM
-module, and returns the gateway's MQTT password **once**. Add it to the broker:
-
-```bash
-python3 scripts/mqtt_passwd.py deployment/mosquitto/passwd <gateway-id>
-```
-
-then restart the broker container (`docker compose -f deployment/docker-compose.yml restart mqtt`; the broker re-copies the file on start). Telemetry from anything not registered is rejected and counted.
+In the app: **Settings → Registered devices → Register a gateway** (or `POST /api/v1/devices/gateways`). It returns
+the gateway's MQTT password **once**. With Docker Compose the broker account is created automatically; for a
+hand-run Mosquitto add it with `python3 scripts/mqtt_passwd.py <passwd-file> <gateway-id>` and restart it. Telemetry from anything not registered is rejected and counted.
 
 ### Device simulator
 

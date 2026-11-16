@@ -13,4 +13,5 @@
 | Command **expired** | the UNO didn't answer within 30 s — check the UNO link |
 | Aura answers in **basic mode** | `AURA_PROVIDER`, `AURA_MODEL`, `ANTHROPIC_API_KEY` on the server; Aura ⓘ panel shows the reason |
 | Can't sign in: **account locked** | 5 wrong passwords → wait 5 minutes |
-| Broker container exits | `docker compose logs mqtt`; the password file must exist at `deployment/mosquitto/passwd` |
+| Broker container exits | `docker compose logs mqtt`; check `deployment/mosquitto/entrypoint.sh` is mounted and the `mqttauth` volume exists |
+| Gateway rejected by the broker | password in `secrets.h` must be the one shown at registration; re-register the gateway to get a new one |
