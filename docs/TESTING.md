@@ -44,7 +44,7 @@ PostgreSQL 16, Mosquitto 2.1.2, headless Chromium (Playwright).
 | Frontend unit | **27 / 27 passed** |
 | Frontend e2e (390 / 768 / 1280 px + Android bridge) | **18 / 18 passed** |
 | Settings system test | **6 / 6** — a contact added in the app reached the (simulated) gateway and the flame SMS went to it |
-| Backend pytest | **57 tests: 57 passed** (MQTT round-trip needs an anonymous dev broker) (incl. real-broker round trip, Aura, push) |
+| Backend pytest | **57 tests: 56 passed, 1 skipped** in the final run (the MQTT round-trip test needs an anonymous dev broker; it passed in earlier runs this session) (incl. real-broker round trip, Aura, push) |
 | Firmware host tests (ASan + UBSan) | **20 tests / 101 checks passed** |
 | Firmware builds | UNO and ESP32 compile with 0 warnings |
 | Android | debug APK builds (4.9 MB) |
