@@ -41,15 +41,22 @@ async def run() -> None:
                 await client.subscribe(f"{st.mqtt_topic_root}/+/+/+", qos=1)
                 state.connected, state.last_error, backoff = True, None, 1.0
 
-                async def publish(topic: str, payload: bytes) -> None:
-                    await client.publish(topic, payload, qos=1)
+                async def publish(topic: str, payload: bytes, retain: bool = False) -> None:
+                    await client.publish(topic, payload, qos=1, retain=retain)
 
                 commands.set_publisher(publish)
+                try:  # gateways get the current emergency contacts (retained) whenever the server (re)connects
+                    from .services import gateway_config
+
+                    async with sessionmaker()() as db:
+                        await gateway_config.push_all(db)
+                except Exception:
+                    log.exception("could not publish gateway config")
                 bus.publish("server_status", mqtt=True)
                 log.info("MQTT connected to %s:%s", st.mqtt_host, st.mqtt_port)
                 async for msg in client.messages:
                     topic = str(msg.topic)
-                    if topic.endswith("/cmd"):
+                    if topic.endswith("/cmd") or topic.endswith("/config"):
                         continue  # our own outgoing commands
                     state.received += 1
                     async with sessionmaker()() as db:

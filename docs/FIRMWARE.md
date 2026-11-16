@@ -58,6 +58,7 @@ Arduino IDE alternative: copy `hardware/lib/OrionCore` into your Arduino `librar
 - A disconnected flame DO wire or water sensor wire cannot be detected in firmware alone (both read like "no
   hazard"); see [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md). MQ-2 low-rail disconnection is detected.
 - No actuator feedback hardware: every output is reported as commanded, never verified.
-- Emergency numbers live in the ESP32 firmware (`secrets.h`) so SMS works offline; changing them needs a re-flash.
+- Emergency contacts come from the app via the server (retained MQTT `config` topic) and are stored in ESP32 flash,
+  so SMS/calls work offline. `EMERGENCY_NUMBERS` in `secrets.h` is only the fallback before the first list arrives.
 - DHT22 is read by bit-banging with interrupts off for ~5 ms every 2.5 s (brief servo jitter possible).
 - Event text and GSM wording are English only.

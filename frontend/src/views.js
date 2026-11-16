@@ -391,16 +391,17 @@
           ${num('t-mq2w', t.mq2_warning, 'Smoke warning (raw)', 'Placeholder until calibrated', 'min="0" max="4095"')}${num('t-mq2c', t.mq2_critical, 'Smoke danger (raw)', 'Must be above warning', 'min="0" max="4095"')}
           ${num('t-wet', t.water_wet, 'Water “wet” (raw)', 'Depends on the sensor', 'min="0" max="4095"')}
           ${num('t-temp', t.temp_advisory_c, 'Hot room warning (°C)', 'Leave empty for none', 'step="0.5"')}${num('t-hum', t.humidity_advisory, 'Humid room warning (%)', 'Leave empty for none', 'min="0" max="100"')}</div></section>
-        <section class="card"><h2>Text &amp; call alerts</h2><p class="hint">Sent by the SIM800C, not this app. Off until you add who should receive them.</p>
-          <label class="chk"><input type="checkbox" disabled> Text message alerts</label><label class="chk"><input type="checkbox" disabled> Phone call alerts</label><p class="hint">Emergency contacts are stored on the ORION server (never in this browser) once it is connected.</p></section>
+        ${A().mode === 'live' ? '' : '<section class="card"><h2>Text &amp; call alerts</h2><p class="hint">Emergency contacts for SMS and calls are managed on the ORION server — switch to Live mode and sign in. Simulation mode never texts or calls anyone.</p></section>'}
         <section class="card"><details class="more"><summary>Advanced</summary><div class="fgrid">${num('c-fresh', c.freshness.sensor_s, 'Mark readings old after (s)', 'Older readings show as “not updating”', 'min="5" max="600"')}${num('c-hb', c.freshness.heartbeat_s, 'Mark boards offline after (s)', 'No heartbeat in this time', 'min="5" max="600"')}</div></details></section>
         <div id="cfg-err" class="note crit" hidden></div>
         <div class="row-btns"><button class="btn" type="submit">Save</button><button class="btn ghost" type="button" data-action="cfg-reset">Reset</button></div>
       </form>
+      ${A().mode === 'live' && A().source.user ? '<div id="live-settings" class="stack" style="gap:16px"></div>' : ''}
       <section class="card"><details class="more"><summary>Setup checklist · ${ORION.pending.length} decisions still open</summary><p class="hint">ORION doesn’t guess these. Each one stays switched off or marked until you decide.</p><ul class="pend">${ORION.pending.map((p) => `<li><b>${esc(p.title)}</b><span>${esc(p.detail)}</span></li>`).join('')}</ul></details></section>
       <section class="card"><details class="more" id="diagBox"><summary>Diagnostics</summary><div id="dg"></div></details></section>
       <p class="hint center">ORION is a prototype. It is not a certified fire alarm, gas detector or safety system.</p>`;
       el.querySelector('#cfg').addEventListener('submit', (e) => { e.preventDefault(); saveConfig(el); });
+      if (ORION.liveSettings) ORION.liveSettings.mount(el.querySelector('#live-settings'));
       el.querySelector('#cfgMode').innerHTML = ['demo', 'live'].map((m) => `<button class="seg-b${A().mode === m ? ' on' : ''}" data-action="mode" data-mode="${m}" type="button">${m === 'demo' ? 'Simulation' : 'Live'}</button>`).join('');
     },
     update(el) {

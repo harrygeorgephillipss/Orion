@@ -430,3 +430,4 @@ details.more>summary::-webkit-details-marker{display:none}
 /* listening is shown by the orb's own pulse only — no rings around it */
 .vo-ring{display:none}
 .row-btns input{flex:1;min-width:0;width:auto}
+.tbl select{width:auto;min-width:104px;padding:6px 8px}.tbl input[type=checkbox]{width:auto}.tbl td .btn{white-space:nowrap}

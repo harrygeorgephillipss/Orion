@@ -23,7 +23,8 @@
   Anthropic API (no key in the build environment). Without a configured provider Aura gives basic English answers.
 - The Android app builds but has not been run on a phone; push notifications need the owner's Firebase project and
   are untested end to end. The refresh token is protected by Android's app sandbox, not the hardware keystore.
-- Emergency phone numbers for offline SMS live in the ESP32 firmware (`secrets.h`); changing them needs a re-flash.
+- Emergency contacts reach the gateway only while it is connected to the server; it keeps the last list it
+  received. Up to 5 contacts; one voice call per alert (the first contact marked "call").
 - TLS for HTTPS/MQTT is configured but untested. Rate limiting is per-process memory.
 - Telemetry retention pruning exists but isn't scheduled.
 - Real-time updates re-fetch the full overview on each event — fine for one home, not designed for many homes.

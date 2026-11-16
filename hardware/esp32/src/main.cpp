@@ -7,6 +7,7 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <esp_task_wdt.h>
+#include <Preferences.h>
 #include <OrionCore.h>
 #include "secrets.h"
 
@@ -23,6 +24,21 @@ PubSubClient mqtt;
 LinkParser unoLink;
 const char* NUMBERS[] = EMERGENCY_NUMBERS;
 const size_t NUMBERS_N = sizeof(NUMBERS) / sizeof(NUMBERS[0]);
+
+// Emergency contacts from the ORION app (server → retained MQTT "config"), saved in flash so local alerts keep
+// working after a reboot and without internet. The compiled-in EMERGENCY_NUMBERS are only a fallback.
+struct Contact { char phone[20]; bool sms; bool call; };
+Contact contacts[5]; uint8_t contactsN = 0;
+Preferences nvs;
+void loadContacts() {
+  nvs.begin("orion", true);
+  contactsN = nvs.getUChar("n", 0); if (contactsN > 5) contactsN = 0;
+  if (contactsN) nvs.getBytes("c", contacts, sizeof(Contact) * contactsN);
+  nvs.end();
+}
+void saveContacts() {
+  nvs.begin("orion", false); nvs.putUChar("n", contactsN); nvs.putBytes("c", contacts, sizeof(Contact) * contactsN); nvs.end();
+}
 
 String topic(const char* kind) { return String("orion/") + HOME_ID + "/" + GATEWAY_ID + "/" + kind; }
 uint32_t seq = 0, lastUnoRx = 0, unoBoot = 0, lastHb = 0, lastGsm = 0, mqttRetryAt = 0, mqttBackoff = 1000, attemptId = 1;
@@ -59,6 +75,14 @@ const char* HAZARD_SENSOR[] = {"", SENSOR_MQ2, SENSOR_FLAME, SENSOR_WATER};
 void raiseGsm(uint8_t hazard) {
   char text[160];
   snprintf(text, sizeof(text), "ORION ALERT: %s detected at home. Check immediately. If there is danger call 112 / 101.", hazard == 2 ? "FLAME" : hazard == 1 ? "SMOKE" : "HAZARD");
+  if (contactsN) {
+    bool called = false;
+    for (uint8_t i = 0; i < contactsN; i++) {
+      if (contacts[i].sms) sim.sms(attemptId++, contacts[i].phone, text, hazard);
+      if (contacts[i].call && !called) { sim.call(attemptId++, contacts[i].phone, hazard); called = true; }  // one call: the first call contact
+    }
+    return;
+  }
   for (size_t i = 0; i < NUMBERS_N; i++) sim.sms(attemptId++, NUMBERS[i], text, hazard);
   if (NUMBERS_N) sim.call(attemptId++, NUMBERS[0], hazard);
 }
@@ -122,6 +146,19 @@ void onUnoFrame(const Frame& f) {
 void onMqtt(char* t, byte* payload, unsigned int len) {
   JsonDocument d;
   if (deserializeJson(d, payload, len)) return;
+  if (String(t).endsWith("/config")) {
+    JsonArray cs = d["contacts"].as<JsonArray>();
+    if (cs.isNull()) return;
+    contactsN = 0;
+    for (JsonObject c : cs) {
+      const char* ph = c["phone"] | "";
+      if (!*ph || contactsN >= 5) continue;
+      strlcpy(contacts[contactsN].phone, ph, sizeof(contacts[0].phone));
+      contacts[contactsN].sms = c["sms"] | true; contacts[contactsN].call = c["call"] | false; contactsN++;
+    }
+    saveContacts();
+    return;
+  }
   const char* id = d["command_id"] | ""; const char* act = d["actuator"] | ""; const char* action = d["action"] | ""; long ttl = d["ttl_ms"] | 0;
   if (!*id) return;
   uint8_t idx = cmdNext++ & 7; cmdIds[idx] = id;
@@ -141,6 +178,7 @@ void ensureMqtt() {
     mqttBackoff = 1000;
     mqtt.publish(will.c_str(), "{\"online\":true,\"fw\":\"0.3.0\",\"boot_reason\":\"power_on\"}", true);
     mqtt.subscribe(topic("cmd").c_str(), 1);
+    mqtt.subscribe(topic("config").c_str(), 1);
     flushPending();
   } else {
     mqttRetryAt = millis() + mqttBackoff; mqttBackoff = min<uint32_t>(mqttBackoff * 2, 30000);
@@ -170,6 +208,7 @@ void setup() {
   UNO.begin(38400, SERIAL_8N1, PIN_UNO_RX, PIN_UNO_TX);
   GSM.begin(9600, SERIAL_8N1, PIN_GSM_RX, PIN_GSM_TX);
   sim.begin();
+  loadContacts();
   WiFi.mode(WIFI_STA); WiFi.setAutoReconnect(true); WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 #if MQTT_TLS
   secure.setCACert(MQTT_CA_CERT); mqtt.setClient(secure);

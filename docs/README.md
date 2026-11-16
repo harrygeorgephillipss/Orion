@@ -25,6 +25,6 @@ The 20 documents requested in the master brief, and where each stands.
 | 19 | Known limitations | [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) | ✅ |
 | 20 | Emergency operation and safety limitations | [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md), [hardware-architecture.md](hardware-architecture.md), [VALIDATION.md](VALIDATION.md) | ✅ (physical validation pending) |
 
-Also: [AUDIT_AND_PLAN.md](AUDIT_AND_PLAN.md) (audit + approved plan), [SECURITY.md](SECURITY.md),
+Start here as a user: [USER_GUIDE.md](USER_GUIDE.md). Also: [AUDIT_AND_PLAN.md](AUDIT_AND_PLAN.md) (audit + approved plan), [SECURITY.md](SECURITY.md),
 [HANDOFF.md](HANDOFF.md) (state of work for the next session), device protocol in
 [../hardware/communication/PROTOCOL.md](../hardware/communication/PROTOCOL.md).

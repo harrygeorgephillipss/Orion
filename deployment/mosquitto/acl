@@ -11,3 +11,4 @@ pattern write orion/+/%u/event
 pattern write orion/+/%u/gsm
 pattern write orion/+/%u/cmd_ack
 pattern read orion/+/%u/cmd
+pattern read orion/+/%u/config

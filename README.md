@@ -52,8 +52,8 @@ python3 scripts/mqtt_passwd.py deployment/mosquitto/passwd orion-backend --from-
 docker compose -f deployment/docker-compose.yml --env-file .env up -d --build
 ```
 
-Open `http://localhost:8000`, sign in with the bootstrap owner from `.env`, register a gateway (or the simulator,
-[docs/BACKEND.md](docs/BACKEND.md#device-simulator)), and the existing dashboard shows its data live.
+Open `http://localhost:8000`, sign in with the bootstrap owner from `.env`, and follow
+[docs/USER_GUIDE.md](docs/USER_GUIDE.md): register your gateway, add emergency contacts and people — all in the app.
 
 ## Tests
 
@@ -62,7 +62,7 @@ cd frontend && npm ci && npm run check          # lint + 27 unit + 18 browser e2
 ```
 
 ```bash
-cd backend && pip install -r requirements-dev.txt && pytest   # 55 tests, needs PostgreSQL (and Mosquitto for 1 test)
+cd backend && pip install -r requirements-dev.txt && pytest   # 56 tests, needs PostgreSQL (and Mosquitto for 1 test)
 ```
 
 ```bash

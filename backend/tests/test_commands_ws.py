@@ -17,7 +17,7 @@ class FakeBroker:
         self.sent: list[tuple[str, dict]] = []
         self.fail = fail
 
-    async def __call__(self, topic: str, payload: bytes) -> None:
+    async def __call__(self, topic: str, payload: bytes, retain: bool = False) -> None:
         if self.fail:
             raise ConnectionError("broker down")
         self.sent.append((topic, json.loads(payload)))
@@ -123,3 +123,16 @@ async def test_overview_reflects_ingest(gateway, client, auth):
     await all_normal()
     o = (await client.get("/api/v1/overview", headers=auth["viewer"])).json()
     assert o["controllers"]["uno-test"]["last_seen_at"] is not None
+
+
+async def test_contacts_are_pushed_to_gateways_as_retained_config(gateway, client, auth):
+    fb = FakeBroker()
+    commands.set_publisher(fb)
+    r = await client.post("/api/v1/contacts", json={"name": "Mum", "phone": "+919812345678", "sms": True, "call": True}, headers=auth["admin"])
+    assert r.status_code == 201 and r.json()["gateways_updated"] == 1
+    topic, body = fb.sent[-1]
+    assert topic == "orion/home-1/esp32-test/config"
+    assert body["contacts"] == [{"name": "Mum", "phone": "+919812345678", "sms": True, "call": True}]
+    cid = r.json()["id"]
+    assert (await client.delete(f"/api/v1/contacts/{cid}", headers=auth["admin"])).json()["gateways_updated"] == 1
+    assert fb.sent[-1][1]["contacts"] == []

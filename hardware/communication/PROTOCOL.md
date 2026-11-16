@@ -26,6 +26,7 @@ speak it is Phase 3 and does not exist yet.
 | `gsm` | device → server | SIM800C registration/signal + SMS/call attempt states |
 | `cmd_ack` | device → server | answer to a command |
 | `cmd` | server → device | a remote command (allow-listed, expiring) |
+| `config` | server → device (retained) | emergency contacts `{"version":1,"contacts":[{"name","phone","sms","call"}]}`, stored in flash |
 
 All device → server messages carry a monotonically increasing `seq` (gaps are counted and shown in Diagnostics).
 Times are **relative** (`age_ms` = how long ago, by the device's own clock) so devices need no real-time clock;

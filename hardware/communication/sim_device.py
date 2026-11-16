@@ -39,6 +39,7 @@ class Sim:
         self.events: list[dict] = []
         self.gsm_attempts: list[dict] = []
         self.th = {"warning": 350, "critical": 500, "wet": 300}
+        self.contacts: list[dict] = []  # from the server's retained "config" message, like the real ESP32
         self.t0 = time.time()
 
     def nxt(self) -> int:
@@ -67,8 +68,11 @@ class Sim:
         if flame and not fw["flame"]:
             fw["flame"] = True
             self.event("flame", "flame-sim", "Red LED ON; white + warm-white lights OFF; GSM SMS and call requested")
-            for kind in ("sms", "call"):
-                self.gsm_attempts.append({"id": f"gsm-{int(now * 1000)}-{kind}", "type": kind, "destination": "+910000000000", "status": "queued", "note": "Queued on gateway (simulated)", "hazard": "flame", "sensor": "flame-sim", "_t": now})
+            targets = [(c["phone"], "sms") for c in self.contacts if c.get("sms")] + [(c["phone"], "call") for c in self.contacts if c.get("call")][:1]
+            if not self.contacts:
+                targets = [("+910000000000", "sms"), ("+910000000000", "call")]  # fallback, like EMERGENCY_NUMBERS
+            for i, (phone, kind) in enumerate(targets):
+                self.gsm_attempts.append({"id": f"gsm-{int(now * 1000)}-{i}-{kind}", "type": kind, "destination": phone, "status": "queued", "note": "Queued on gateway (simulated)", "hazard": "flame", "sensor": "flame-sim", "_t": now})
         elif not flame and fw["flame"]:
             fw["flame"] = False
             self.event("flame", "flame-sim", "Flame ended: model lights restored")
@@ -154,6 +158,7 @@ class Sim:
         async with aiomqtt.Client(a.host, a.port, username=a.username or None, password=a.password or None, identifier=a.gateway, will=will, keepalive=15) as client:
             await client.publish(f"{self.base}/status", json.dumps({"online": True, "fw": "0.1.0-sim", "boot_reason": "power_on"}), qos=1, retain=True)
             await client.subscribe(f"{self.base}/cmd", qos=1)
+            await client.subscribe(f"{self.base}/config", qos=1)
             print(f"[sim] connected as {a.gateway}; scenario={self.scenario}. Type a scenario name + Enter.", flush=True)
 
             async def listen() -> None:
@@ -161,6 +166,10 @@ class Sim:
                     try:
                         body = json.loads(msg.payload)
                     except ValueError:
+                        continue
+                    if str(msg.topic).endswith("/config"):
+                        self.contacts = list(body.get("contacts") or [])[:5]
+                        print(f"[sim] emergency contacts from server: {len(self.contacts)}", flush=True)
                         continue
                     if body.get("controller") == a.controller:
                         asyncio.create_task(self.on_command(client, body))

@@ -84,7 +84,8 @@
     if (ev.backendError) return statePanel('error', 'Can’t load data', 'The ORION server returned an error. Nothing is shown rather than guessing.', ORION.app.lastOkAt ? `<div class="sp-x">Last good update: ${esc(F.dt(ORION.app.lastOkAt))}</div>` : '');
     if (ev.noData) return statePanel('empty', 'No data yet', 'Nothing has been received from the home yet. Readings appear here once the ESP32 starts sending.');
     if (ev.needsAuth) return statePanel('unconfigured', 'Sign in to ORION', 'Live data is only shown to signed-in users.', '<div class="sp-x"><button class="btn sm" data-action="login-open">Sign in</button></div>');
-    if (ev.unconfigured) return statePanel('unconfigured', 'Live data not connected yet', 'No ORION server is configured. Simulation mode lets you explore ORION with invented data.', '<div class="sp-x"><button class="btn sm" data-action="mode" data-mode="demo">Use simulation</button></div>');
+    if (ev.unconfigured) return statePanel('unconfigured', 'Connect to your ORION server', 'Enter the address of the ORION server for your home (for example https://orion.local). Simulation mode lets you explore with invented data.',
+      '<div class="sp-x row-btns"><input id="c-server" placeholder="https://your-orion-server" inputmode="url" autocapitalize="off" maxlength="200" aria-label="ORION server address"><button class="btn sm" data-action="server-save">Connect</button><button class="btn sm ghost" data-action="mode" data-mode="demo">Use simulation</button></div>');
     return null;
   }
   function kv(rows) {

@@ -63,6 +63,10 @@ test('native: without a saved server the app does not treat its own origin as th
   assert.equal(await page.evaluate(() => ORION.app.mode), 'live');
   assert.equal(await page.evaluate(() => ORION.app.source.base), '');
   assert.equal(await page.evaluate(() => ORION.app.snap.status), 'unconfigured');
+  // first launch: the home screen asks for the server address and connecting switches the app to it
+  await page.fill('#c-server', SERVER);
+  await page.click('button[data-action="server-save"]');
+  await page.waitForFunction((s) => ORION.app.source.base === s && ORION.app.snap.status === 'auth', SERVER);
   await browser.close();
 });
 

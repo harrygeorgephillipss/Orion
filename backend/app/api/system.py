@@ -13,6 +13,7 @@ from ..audit import audit
 from ..bus import bus
 from ..deps import client_ip, current_user, db_session, require_role
 from ..models import AuditLog, NotificationContact, Role, User
+from ..services import gateway_config
 from ..services.settings_store import DEFAULTS, get_config, get_config_row, set_config
 from ..timeutil import ms
 
@@ -146,7 +147,8 @@ async def add_contact(body: ContactIn, request: Request, user: User = Depends(re
     await db.flush()
     audit(db, "user", user.id, "contact.create", c.id, {"name": c.name}, client_ip(request))  # number deliberately not logged
     await db.commit()
-    return _contact(c, True)
+    sent = await gateway_config.push_all(db)
+    return _contact(c, True) | {"gateways_updated": sent}
 
 
 @router.delete("/contacts/{contact_id}")
@@ -157,4 +159,4 @@ async def delete_contact(contact_id: str, request: Request, user: User = Depends
     await db.delete(c)
     audit(db, "user", user.id, "contact.delete", contact_id, ip=client_ip(request))
     await db.commit()
-    return {"ok": True}
+    return {"ok": True, "gateways_updated": await gateway_config.push_all(db)}
