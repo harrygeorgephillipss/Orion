@@ -59,6 +59,16 @@ class Home(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     timezone: str = Field(max_length=60)
 
+    @model_validator(mode="after")
+    def _tz(self) -> "Home":
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise ValueError(f"unknown time zone {self.timezone!r}")
+        return self
+
 
 SCHEMAS = {"freshness": Freshness, "thresholds": Thresholds, "home": Home}
 

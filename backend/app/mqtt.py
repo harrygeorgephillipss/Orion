@@ -54,7 +54,7 @@ async def run() -> None:
                     state.received += 1
                     async with sessionmaker()() as db:
                         try:
-                            await ingest.handle(db, topic, msg.payload, root=st.mqtt_topic_root)
+                            await ingest.handle(db, topic, msg.payload, root=st.mqtt_topic_root, retained=bool(msg.retain))
                             await db.commit()
                         except ingest.IngestError as e:
                             await db.rollback()

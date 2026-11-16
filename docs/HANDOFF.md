@@ -20,7 +20,7 @@ Last updated: 2026-11-16 · branch `dev` · read this first in a new session, th
 |---|---|
 | 0 Bootstrap | baseline commit, `.gitignore`, `.env.example`, audit |
 | 1 Frontend | fixes B1–B3, B5, B6 (see audit), registry-driven UI, Simulation labelling, error boundaries, lint, 27 unit + 12 e2e tests passing |
-| 2 Backend | FastAPI/Postgres/MQTT/WS, auth + RBAC, ingest, incident engine, commands, audit, config, contacts, simulator, LiveSource, Docker/compose, broker ACL — 37 backend tests + 8-step full-stack system test passing; broker ACL verified; image boot verified |
+| 2 Backend | FastAPI/Postgres/MQTT/WS, auth + RBAC, ingest, incident engine, commands, audit, config, contacts, simulator, LiveSource, Docker/compose, broker ACL — 42 backend tests + 8-step full-stack system test passing, also on the production compose stack with broker auth on |
 
 Details and numbers: [TESTING.md](TESTING.md).
 
@@ -45,7 +45,7 @@ git clone https://github.com/harrygeorgephillipss/Orion.git && cd Orion && git c
 ```
 
 Then follow [BACKEND.md](BACKEND.md) (Option B) to start PostgreSQL + Mosquitto + backend, and
-[TESTING.md](TESTING.md) to run every suite. Expected: lint clean, 27 + 12 frontend, 37 backend, 8/8 system.
+[TESTING.md](TESTING.md) to run every suite. Expected: lint clean, 27 + 16 frontend, 42 backend, 8/8 system.
 
 ## Conventions
 

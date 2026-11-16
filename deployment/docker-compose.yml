@@ -24,8 +24,9 @@ services:
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - ./mosquitto/acl:/mosquitto/config/acl:ro
-      - ./mosquitto/passwd:/mosquitto/config/passwd:ro
+      - ./mosquitto/passwd:/run/orion/passwd:ro   # host file is 0600; copied in below with the broker's own owner
       - mqttdata:/mosquitto/data
+    entrypoint: ["sh", "-c", "install -o mosquitto -g mosquitto -m 600 /run/orion/passwd /mosquitto/config/passwd && exec /docker-entrypoint.sh /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf"]
     ports: ["1883:1883"]   # gateways on the LAN connect here; use 8883 + TLS when exposed beyond the LAN
 
   backend:

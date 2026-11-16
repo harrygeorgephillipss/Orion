@@ -221,3 +221,20 @@ async def test_lwt_keeps_true_last_seen_and_reconnect_recovers(gateway, db, clie
     await all_normal()
     o = (await client.get("/api/v1/overview", headers=auth["viewer"])).json()["controllers"]["esp32-test"]
     assert o["connected"] is True
+
+
+async def test_retained_online_status_does_not_mark_gateway_seen(gateway, db):
+    from app.db import sessionmaker
+    from app.services import ingest as ing
+
+    async with sessionmaker()() as s:
+        await ing.handle(s, "orion/home-1/esp32-test/status", '{"online": true, "fw": "1.0"}', retained=True)
+        await s.commit()
+    assert await fresh(Device, "esp32-test", lambda d: d.last_seen_at) is None
+
+
+async def test_unknown_reading_fields_are_dropped(gateway, db):
+    await all_normal()
+    await send("telemetry", {"seq": nxt(), "controller": "uno-test", "readings": [reading("mq2-1", {"raw_adc": 200, "junk": "x" * 5000, "nested": {"a": 1}})]})
+    f = await fresh(Sensor, "mq2-1", lambda s: s.fields)
+    assert f == {"raw_adc": 200}

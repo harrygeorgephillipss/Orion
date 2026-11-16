@@ -57,11 +57,11 @@ Open `http://localhost:8000`, sign in with the bootstrap owner from `.env`, regi
 ## Tests
 
 ```bash
-cd frontend && npm ci && npm run check          # lint + 27 unit + 12 browser e2e tests
+cd frontend && npm ci && npm run check          # lint + 27 unit + 16 browser e2e tests
 ```
 
 ```bash
-cd backend && pip install -r requirements-dev.txt && pytest   # 37 tests, needs PostgreSQL (and Mosquitto for 1 test)
+cd backend && pip install -r requirements-dev.txt && pytest   # 42 tests, needs PostgreSQL (and Mosquitto for 1 test)
 ```
 
 Results and how the full-stack system test is run: [docs/TESTING.md](docs/TESTING.md).

@@ -3,12 +3,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..audit import audit
 from ..deps import client_ip, current_user, db_session, require_role
-from ..models import ROLE_RANK, Role, User
+from ..models import ROLE_RANK, RefreshToken, Role, User
+from ..timeutil import now as utcnow
 from ..security import hash_password, password_problems, verify_password
 from .auth import user_out
 
@@ -59,16 +60,21 @@ async def patch_user(user_id: str, body: UserPatch, request: Request, actor: Use
     u = await db.get(User, user_id)
     if not u:
         raise HTTPException(404, "No such user")
-    if u.role == Role.owner and actor.role != Role.owner:
-        raise HTTPException(403, "Only the owner can change the owner account")
-    if body.role is not None and body.role == Role.owner and actor.role != Role.owner:
-        raise HTTPException(403, "Only the owner can grant the owner role")
     if u.id == actor.id and (body.is_active is False or (body.role is not None and body.role != actor.role)):
         raise HTTPException(422, "You cannot disable yourself or change your own role")
+    if actor.role != Role.owner:
+        # Admins may only manage users ranked below them, and only grant roles below their own.
+        if u.id != actor.id and ROLE_RANK[u.role] >= ROLE_RANK[actor.role]:
+            raise HTTPException(403, "You can only change users with a lower role than your own")
+        if body.role is not None and ROLE_RANK[body.role] >= ROLE_RANK[actor.role]:
+            raise HTTPException(403, "You can only grant roles lower than your own")
     for k in ("name", "role", "is_active"):
         v = getattr(body, k)
         if v is not None:
             setattr(u, k, v)
+    if body.is_active is False or body.role is not None:
+        # Disabled or re-roled users must sign in again everywhere.
+        await db.execute(update(RefreshToken).where(RefreshToken.user_id == u.id, RefreshToken.revoked_at.is_(None)).values(revoked_at=utcnow()))
     audit(db, "user", actor.id, "user.update", u.id, body.model_dump(exclude_none=True, mode="json"), client_ip(request))
     await db.commit()
     return user_out(u) | {"is_active": u.is_active}
@@ -81,6 +87,8 @@ async def change_password(body: PasswordIn, request: Request, user: User = Depen
     if probs := password_problems(body.new_password):
         raise HTTPException(422, " ".join(probs))
     user.password_hash = hash_password(body.new_password)
+    # Sign out every other session (refresh tokens); the caller signs in again with the new password.
+    await db.execute(update(RefreshToken).where(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None)).values(revoked_at=utcnow()))
     audit(db, "user", user.id, "user.password_change", ip=client_ip(request))
     await db.commit()
     return {"ok": True}

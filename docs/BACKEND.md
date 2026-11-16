@@ -81,7 +81,7 @@ module, and returns the gateway's MQTT password **once**. Add it to the broker:
 python3 scripts/mqtt_passwd.py deployment/mosquitto/passwd <gateway-id>
 ```
 
-then restart the broker container. Telemetry from anything not registered is rejected and counted.
+then restart the broker container (`docker compose -f deployment/docker-compose.yml restart mqtt`; the broker re-copies the file on start). Telemetry from anything not registered is rejected and counted.
 
 ### Device simulator
 

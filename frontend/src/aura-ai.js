@@ -208,7 +208,9 @@
     });
     return {
       now: F.dt(now), timezone: cfg.timezone, home: cfg.home.name,
-      data_source: app.mode === 'demo' ? 'SIMULATION — invented test data, not real hardware readings' : 'live hardware telemetry',
+      data_source: app.mode === 'demo' ? 'SIMULATION — invented test data, not real hardware readings'
+        : snap.simulated ? 'SIMULATED DEVICES on the live server — device-simulator data, not real hardware readings'
+          : snap.contains_simulated ? 'live server; sensors marked simulated:true are simulator data, not hardware readings' : 'live hardware telemetry',
       overall_state: ev.system, state_reasons: ev.reasons, also: ev.notes,
       sensors: R.sensorList(snap).map((s) => {
         const f = s.fields || {};
@@ -284,7 +286,7 @@
           const gaps = buckets.filter((b) => b.value == null).length;
           const unit = metric === 'temp' ? F.tempUnit() : metric === 'hum' ? '%RH' : metric === 'flame' ? '1 = flame detected' : 'raw ADC (not ppm)';
           const alerts = app.snap.incidents.filter((x) => x.source_id === ORION.registry.parseSeries(series).sensorId && x.opened_at >= from).map((x) => ({ what: ORION.ui.incidentSentence(x), severity: x.severity, opened: F.dt(x.opened_at), resolved: x.cleared_at ? F.dt(x.cleared_at) : 'still active' }));
-          return { sensor: key, unit, window: `${F.dt(from)} → ${F.dt(to)}`, data_source: app.mode === 'demo' ? 'SIMULATION' : 'live', max: { value: +mx.toFixed(1), at: F.dt(tmx) }, min: { value: +mn.toFixed(1), at: F.dt(tmn) }, average: +(sum / pts.length).toFixed(1), points: buckets, buckets_with_no_data: gaps, alerts };
+          return { sensor: key, unit, window: `${F.dt(from)} → ${F.dt(to)}`, data_source: app.mode === 'demo' || (app.snap.sensors[ORION.registry.parseSeries(series).sensorId] || {}).simulated ? 'SIMULATION' : 'live hardware', max: { value: +mx.toFixed(1), at: F.dt(tmx) }, min: { value: +mn.toFixed(1), at: F.dt(tmn) }, average: +(sum / pts.length).toFixed(1), points: buckets, buckets_with_no_data: gaps, alerts };
         } },
       { name: 'get_alerts', description: 'Alert records: what happened, severity, start/end times, sensor reading, what the devices reported doing (with outcomes), and whether the owner marked it as seen. filter "active" or "recent".',
         inputSchema: { type: 'object', properties: { filter: { type: 'string', enum: ['active', 'recent'] }, limit: { type: 'number' } } },

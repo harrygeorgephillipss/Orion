@@ -146,3 +146,73 @@ test('an exception inside a view shows an error panel instead of a blank page', 
   assert.equal(await page.locator('.tile').count(), 5);
   await page.close();
 });
+
+test('disconnected, faulty or never-reported sensors are never shown as healthy', async () => {
+  const { page, errors } = await open();
+  await page.evaluate(() => {
+    const src = ORION.app.source, orig = src.snapshot.bind(src);
+    src.snapshot = () => {
+      const s = orig(); if (s.status !== 'ok') return s;
+      const c = JSON.parse(JSON.stringify(s));
+      c.sensors['flame-kitchen'].quality = 'disconnected';
+      c.sensors['water-utility'].quality = 'fault';
+      c.sensors['dht22-living'].received_at = null;
+      return c;
+    };
+    ORION.app.onData();
+  });
+  const tile = (k) => page.locator(`.tile[data-k="${k}"]`).innerText();
+  for (const k of ['flame-kitchen:flame', 'water-utility:water', 'dht22-living:temp']) {
+    const t = await tile(k);
+    assert.match(t, /No reading/, k + ' → ' + t);
+    assert.doesNotMatch(t, /\bNone\b|\bDry\b/);
+  }
+  assert.notEqual(await page.evaluate(() => ORION.app.ev.system), 'NORMAL');
+  assert.deepEqual(errors, []);
+  await page.close();
+});
+
+test('device-reported alarm state wins even if the raw field is missing', async () => {
+  const { page } = await open();
+  await page.evaluate(() => {
+    const src = ORION.app.source, orig = src.snapshot.bind(src);
+    src.snapshot = () => { const s = orig(); if (s.status !== 'ok') return s; const c = JSON.parse(JSON.stringify(s)); c.sensors['water-utility'].state = 'warning'; delete c.sensors['water-utility'].fields.wet; return c; };
+    ORION.app.onData();
+  });
+  assert.match(await page.locator('.tile[data-k="water-utility:water"]').innerText(), /Wet/);
+  await page.close();
+});
+
+test('live server with simulated devices: Aura and CSV never call the data hardware', async () => {
+  const { page } = await open();
+  const r = await page.evaluate(() => {
+    const snap = JSON.parse(JSON.stringify(ORION.app.source.snapshot()));
+    snap.mode = 'live'; snap.simulated = true; snap.contains_simulated = true;
+    const pts = ORION.app.source.history('mq2-hall:mq2', Date.now() - 3600e3, Date.now()).map((p) => Object.assign({}, p, { sim: true }));
+    ORION.app.mode = 'live';
+    ORION.app.source = { snapshot: () => snap, history: () => pts, stop() {}, start() {} };
+    ORION.app.onData();
+    const ctx = ORION.auraAI.context(ORION.app);
+    const csv = ORION.views._.buildCSV('mq2-hall:mq2', Date.now() - 3600e3, Date.now());
+    const basic = ORION.aura.answer('smoke level?', snap, ORION.app.ev, ORION.app.config);
+    return { ds: ctx.data_source, row: csv.split('\n')[1], caveats: basic.caveats.join(' '), bar: document.getElementById('demoBar').hidden, barTxt: document.getElementById('demoTxt').innerText };
+  });
+  assert.match(r.ds, /SIMULATED/);
+  assert.match(r.row, /,simulation$/);
+  assert.match(r.caveats, /SIMULATED/);
+  assert.equal(r.bar, false);
+  assert.match(r.barTxt, /SIMULATED DEVICES/);
+  await page.close();
+});
+
+test('live mode keeps retrying when the server is down at start-up', async () => {
+  const { page } = await open(null, () => { localStorage.setItem('orion.server', JSON.stringify('http://127.0.0.1:9')); localStorage.setItem('orion.mode', JSON.stringify('live')); });
+  await page.waitForFunction(() => ORION.app.snap.status === 'error', null, { timeout: 10000 });
+  const attempts = await page.evaluate(() => new Promise((res) => {
+    let n = 0; const f = window.fetch; window.fetch = (...a) => { n++; return f(...a); };
+    setTimeout(() => res(n), 4000);
+  }));
+  assert.ok(attempts >= 1, 'should retry connecting');
+  assert.equal(await page.locator('.tile').count(), 0);
+  await page.close();
+});

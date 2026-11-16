@@ -83,3 +83,39 @@ async def test_security_headers_and_health(client):
     assert r.status_code == 200 and r.json()["database"] is True
     assert r.headers["x-content-type-options"] == "nosniff"
     assert r.headers["cache-control"] == "no-store"
+
+
+async def test_admin_cannot_escalate_or_manage_peers(client, auth, users):
+    member_id, admin_id = users["member"].id, users["admin"].id
+    # promote a member to admin → refused
+    r = await client.patch(f"/api/v1/users/{member_id}", json={"role": "admin"}, headers=auth["admin"])
+    assert r.status_code == 403
+    # disable another admin → refused
+    from tests.conftest import make_user
+    from app.db import sessionmaker
+    async with sessionmaker()() as db:
+        other = await make_user(db, "admin2@example.com", Role.admin)
+        other_id = other.id
+    assert (await client.patch(f"/api/v1/users/{other_id}", json={"is_active": False}, headers=auth["admin"])).status_code == 403
+    # owner can do both
+    assert (await client.patch(f"/api/v1/users/{member_id}", json={"role": "admin"}, headers=auth["owner"])).status_code == 200
+    # admin may still manage lower roles
+    assert (await client.patch(f"/api/v1/users/{users['viewer'].id}", json={"role": "member"}, headers=auth["admin"])).status_code == 200
+    assert admin_id
+
+
+async def test_password_change_and_disable_revoke_sessions(client, users, auth):
+    tok = (await login(client, "member@example.com", "mobile"))["refresh_token"]
+    access = (await login(client, "member@example.com"))["access_token"]
+    r = await client.post("/api/v1/users/me/password", json={"current_password": PASSWORD, "new_password": "Brand-New-Pass-7"}, headers={"Authorization": f"Bearer {access}"})
+    assert r.status_code == 200
+    assert (await client.post("/api/v1/auth/refresh", json={"refresh_token": tok, "client": "mobile"})).status_code == 401
+    tok2 = (await login(client, "viewer@example.com", "mobile"))["refresh_token"]
+    assert (await client.patch(f"/api/v1/users/{users['viewer'].id}", json={"is_active": False}, headers=auth["owner"])).status_code == 200
+    assert (await client.post("/api/v1/auth/refresh", json={"refresh_token": tok2, "client": "mobile"})).status_code == 401
+    assert (await client.get("/api/v1/auth/me", headers=auth["viewer"])).status_code == 401, "disabled user's access token stops working"
+
+
+async def test_home_timezone_validated(client, auth):
+    assert (await client.put("/api/v1/config/home", json={"name": "H", "timezone": "Mars/Base"}, headers=auth["admin"])).status_code == 422
+    assert (await client.put("/api/v1/config/home", json={"name": "H", "timezone": "Asia/Kolkata"}, headers=auth["admin"])).status_code == 200

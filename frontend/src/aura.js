@@ -16,8 +16,9 @@
     const t = q.toLowerCase();
     const res = { facts: [], interp: '', caveats: [], links: [] };
     const now = Date.now();
-    const demo = snap.mode === 'demo';
+    const demo = snap.mode === 'demo' || snap.simulated === true;
     if (demo) res.caveats.push('All values are SIMULATED test data, not readings from your hardware.');
+    else if (snap.contains_simulated) res.caveats.push('Some devices on this server are simulated; their values are not hardware readings.');
 
     // safety-first intents
     if (/(there'?s|there is|i see|real)\s+(a )?(fire|smoke)|help|emergency|burning|evacuat/.test(t)) {
@@ -34,7 +35,8 @@
     if (snap.status !== 'ok') {
       res.interp = snap.status === 'error' ? 'I can’t reach ORION data right now (backend error), so I can’t tell you any current values. I won’t guess.'
         : snap.status === 'empty' ? 'ORION has not received any telemetry yet, so there is nothing to report.'
-          : snap.status === 'unconfigured' ? 'No live data source is connected. Switch to Demo mode or connect a backend (Phase 2).'
+          : snap.status === 'unconfigured' ? 'No ORION server is connected, so I have no readings. Add the server address in Settings, or use Simulation mode to explore.'
+            : snap.status === 'auth' ? 'Please sign in to ORION first — I only report data you are allowed to see.'
             : 'Data is still loading.';
       return res;
     }
@@ -81,7 +83,8 @@
     }
     if (/water|leak|wet/.test(t)) {
       const w = sensorOf('water'); if (!w) return missing('water sensor');
-      fact('Water sensor now', `${w.fields.wet ? 'WET' : 'dry'} · raw ${w.fields.raw_adc}`, w.id, w.recorded_at);
+      const wet = w.state === 'warning' || w.state === 'critical' || w.fields.wet === true;
+      fact('Water sensor now', w.quality !== 'valid' ? `no valid reading (${w.quality})` : `${wet ? 'WET' : 'dry'} · raw ${w.fields.raw_adc}`, w.id, w.recorded_at);
       const last = snap.incidents.filter((i) => i.type === 'water').sort((a, b) => b.opened_at - a.opened_at)[0];
       if (last) fact('Latest water event', `${last.state === 'cleared' ? 'cleared' : 'ACTIVE'} · opened ${F.dt(last.opened_at)} · raw ${last.snapshot.value}`, null, last.opened_at);
       res.interp = last ? 'That is the most recent water incident in ORION’s history.' : 'No water incidents are on record.';
@@ -99,7 +102,8 @@
     }
     if (/flame|fire/.test(t)) {
       const f = sensorOf('flame'); if (!f) return missing('flame sensor');
-      fact('Flame sensor', f.fields.detected ? 'DETECTED' : 'not detected', f.id, f.recorded_at);
+      const fl = f.state === 'critical' || f.fields.detected === true;
+      fact('Flame sensor', f.quality !== 'valid' ? `no valid reading (${f.quality})` : fl ? 'DETECTED' : 'not detected', f.id, f.recorded_at);
       res.interp = 'Digital flame module reading. Its polarity has not been verified on the real hardware.';
       return res;
     }

@@ -40,14 +40,25 @@
     }
     stop() {
       this.stopped = true;
-      clearInterval(this.timer); this.timer = null;
+      clearInterval(this.timer); this.timer = null; clearTimeout(this._bootT); clearTimeout(this._refetchT);
       if (this.ws) { try { this.ws.close(); } catch (e) { /* closed */ } this.ws = null; }
     }
     _emit() { for (const l of this.listeners) { try { l(); } catch (e) { console.error(e); } } }
 
     async _boot() {
+      if (this.stopped) return;
       const ok = await this._refresh();
-      if (!ok) { if (this.snap.status !== 'error') this.snap = { status: 'auth', message: 'Sign in to see live data.' }; this._emit(); return; }
+      if (!ok) {
+        if (this.snap.status === 'error') {
+          // Server unreachable at start-up: keep trying (with back-off) instead of giving up.
+          this._emit();
+          this._bootT = setTimeout(() => this._boot(), this.wsBackoff);
+          this.wsBackoff = Math.min(this.wsBackoff * 2, 30000);
+          return;
+        }
+        this.snap = { status: 'auth', message: 'Sign in to see live data.' }; this._emit(); return;
+      }
+      this.wsBackoff = 1000;
       await this._afterAuth();
     }
     async _afterAuth() {

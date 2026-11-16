@@ -1,5 +1,6 @@
 """End-to-end through a real Mosquitto broker: device publishes → backend ingests → command flows back.
-Skipped when no broker is reachable on localhost:1883."""
+Needs a development broker on localhost:1883 that accepts anonymous clients (see docs/TESTING.md).
+Skipped when none is reachable, or when the broker on that port requires passwords."""
 from __future__ import annotations
 
 import asyncio
@@ -17,15 +18,23 @@ from app.models import Sensor
 from app.services import commands
 
 
-def broker_up() -> bool:
+def anonymous_broker() -> bool:
     try:
         socket.create_connection(("127.0.0.1", 1883), timeout=1).close()
-        return True
     except OSError:
         return False
 
+    async def probe() -> bool:
+        try:
+            async with aiomqtt.Client("127.0.0.1", 1883, identifier="orion-test-probe"):
+                return True
+        except aiomqtt.MqttError:
+            return False
 
-pytestmark = pytest.mark.skipif(not broker_up(), reason="no MQTT broker on localhost:1883")
+    return asyncio.run(probe())
+
+
+pytestmark = pytest.mark.skipif(not anonymous_broker(), reason="no anonymous development MQTT broker on localhost:1883")
 
 
 async def test_device_to_backend_and_command_back(gateway, client, auth):

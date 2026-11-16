@@ -26,14 +26,26 @@
     if (m === 'mq2') {
       if (s.quality === 'warming_up' && st.status !== 'stale') { big = 'Warming up'; small = `${s.warmup_remaining_s} s left`; level = 'muted'; }
       else { big = { normal: 'Clear', warning: 'Smoke', critical: 'Danger' }[s.state] || '—'; small = `Level ${f.raw_adc} (raw)`; level = { normal: 'ok', warning: 'warn', critical: 'crit' }[s.state] || 'muted'; }
-    } else if (m === 'flame') { big = f.detected ? 'Flame!' : 'None'; level = f.detected ? 'crit' : 'ok'; small = f.detected ? 'Fire sensor triggered' : 'No flame seen'; }
-    else if (m === 'water') { big = f.wet ? 'Wet' : 'Dry'; level = f.wet ? 'warn' : 'ok'; small = `Level ${f.raw_adc} (raw)`; }
+    } else if (m === 'flame') {
+      // The controller's state is authoritative; the raw field is only a fallback.
+      const fl = s.state === 'critical' || s.state === 'warning' || f.detected === true;
+      big = fl ? 'Flame!' : 'None'; level = fl ? 'crit' : 'ok'; small = fl ? 'Fire sensor triggered' : 'No flame seen';
+    } else if (m === 'water') {
+      const wet = s.state === 'warning' || s.state === 'critical' || f.wet === true;
+      big = wet ? 'Wet' : 'Dry'; level = wet ? 'warn' : 'ok'; small = f.raw_adc == null ? '' : `Level ${f.raw_adc} (raw)`;
+    }
     else if (m === 'temp') { if (f.temperature_c == null) { big = 'No reading'; level = 'muted'; } else { big = F.temp(f.temperature_c); unit = F.tempUnit(); small = 'Room temperature'; } }
     else if (m === 'hum') { if (f.humidity_percent == null) { big = 'No reading'; level = 'muted'; } else { big = f.humidity_percent.toFixed(0); unit = '%'; small = 'Relative humidity'; } }
+    // A sensor that is faulty, disconnected or not ready never shows a healthy-looking value.
     if (st.status === 'fault') { big = 'No reading'; level = 'muted'; small = 'Sensor fault'; }
+    if (st.status === 'disconnected') { big = 'No reading'; level = 'muted'; small = 'Sensor disconnected'; }
+    if (st.status === 'warming_up' && m !== 'mq2') { big = 'Not ready'; level = 'muted'; small = 'Warming up'; }
+    if (st.status === 'stale' && s.received_at == null) { big = 'No reading'; level = 'muted'; small = ''; }
+    if (st.status === 'live' && s.quality === 'valid' && s.state === 'unknown' && (m === 'flame' || m === 'water' || m === 'mq2')) { big = 'Unknown'; level = 'muted'; small = 'Controller reported no state'; }
     let foot;
     if (st.status === 'stale') foot = s.received_at == null ? 'No reading received yet' : `Not updating · last reading ${F.ago(s.received_at)}`;
     else if (st.status === 'fault') foot = 'Sensor reported a fault';
+    else if (st.status === 'disconnected') foot = 'Check the sensor wiring';
     else if (st.status === 'warming_up') foot = 'Getting ready';
     else foot = `Updated ${F.ago(s.received_at)}`;
     return { big, small, level, unit, foot, stale: st.status === 'stale', status: st.status, room: R.roomOf(A().config, s) };
@@ -248,7 +260,7 @@
         sum = `<div><b>${mx.toFixed(dp)}${unit}</b><span>highest</span></div><div><b>${mn.toFixed(dp)}${unit}</b><span>lowest</span></div><div><b>${(tot / pts.length).toFixed(dp)}${unit}</b><span>average</span></div>`;
       } else sum = '';
       set(el, '#hi-sum', sum + `<div><b>${n}</b><span>${n === 1 ? 'alert' : 'alerts'}</span></div>`);
-      set(el, '#hi-range', `${esc(F.dt(from))} → ${esc(F.dt(to))}${isSim() ? ' · simulated data' : ''}${m === 'mq2' || m === 'water' ? ' · raw sensor level, not calibrated' : ''}`);
+      set(el, '#hi-range', `${esc(F.dt(from))} → ${esc(F.dt(to))}${isSim() || (snap.sensors[sid] && snap.sensors[sid].simulated) ? ' · simulated data' : ''}${m === 'mq2' || m === 'water' ? ' · raw sensor level, not calibrated' : ''}`);
       set(el, '#hi-chart', chartFor(s, from, to, 300, viewW() - 50));
     },
   };
@@ -258,7 +270,7 @@
     if (!S) return rows[0];
     const source = isSim() ? 'simulation' : 'hardware';
     const q = (v) => (/[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v));
-    for (const p of A().source.history(series, from, to) || []) rows.push([S.metric, S.sensorId, U.iso(p.t), U.iso(p.r), p.v == null ? '' : p.v, S.metric === 'temp' ? 'celsius' : S.unit, p.q, p.sim === false ? 'hardware' : source].map(q).join(','));
+    for (const p of A().source.history(series, from, to) || []) rows.push([S.metric, S.sensorId, U.iso(p.t), U.iso(p.r), p.v == null ? '' : p.v, S.metric === 'temp' ? 'celsius' : S.unit, p.q, p.sim === true || (p.sim == null && source === 'simulation') ? 'simulation' : 'hardware'].map(q).join(','));
     return rows.join('\n');
   }
 

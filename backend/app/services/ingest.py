@@ -181,7 +181,11 @@ def _recorded(received: datetime, age_ms: int) -> datetime:
     return received - timedelta(milliseconds=min(age_ms, MAX_AGE_MS))
 
 
-async def handle(db: AsyncSession, topic: str, payload: bytes | str, root: str = "orion") -> str:
+# Fields each sensor type may report. Anything else in a reading is dropped (devices can't stuff the database).
+ALLOWED_FIELDS = {"mq2": {"raw_adc"}, "flame": {"detected", "digital_value", "raw_adc"}, "water": {"raw_adc", "wet"}, "dht22": {"temperature_c", "humidity_percent"}}
+
+
+async def handle(db: AsyncSession, topic: str, payload: bytes | str, root: str = "orion", retained: bool = False) -> str:
     """Process one message. Returns the message kind. Raises IngestError for rejected messages. Caller commits."""
     parts = topic.split("/")
     if len(parts) != 4 or parts[0] != root:
@@ -193,6 +197,10 @@ async def handle(db: AsyncSession, topic: str, payload: bytes | str, root: str =
 
     if kind == "status":
         m = _parse(StatusMsg, payload)
+        if m.online and retained:
+            # A retained "online" replayed by the broker (e.g. after a server restart) says nothing about now.
+            gw.firmware_version = m.fw or gw.firmware_version
+            return kind
         if m.online:
             _seen(gw, now)
             gw.firmware_version = m.fw or gw.firmware_version
@@ -235,7 +243,9 @@ async def handle(db: AsyncSession, topic: str, payload: bytes | str, root: str =
             if s is None or s.device_id != ctrl.id:
                 raise IngestError(f"sensor {r.sensor!r} is not registered on controller {ctrl.id!r}")
             rec = _recorded(now, r.age_ms)
-            fields, quality, fault = dict(r.fields), r.quality, r.fault
+            allowed = ALLOWED_FIELDS.get(s.type, set())
+            fields = {k: v for k, v in r.fields.items() if k in allowed and (v is None or isinstance(v, (bool, int, float)))}
+            quality, fault = r.quality, r.fault
             for _, fld in METRICS.get(s.type, []):
                 v = fields.get(fld)
                 if fld in RANGES and v is not None:
