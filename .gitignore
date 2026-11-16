@@ -1,0 +1,34 @@
+# Secrets — never commit
+.env
+*.env
+!.env.example
+*.pem
+*.key
+google-services.json
+firebase-service-account*.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node
+node_modules/
+test-results/
+playwright-report/
+
+# Firmware / Android build output
+.pio/
+build/
+android/app/build/
+android/.gradle/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
