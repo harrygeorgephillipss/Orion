@@ -17,7 +17,7 @@
     const res = { facts: [], interp: '', caveats: [], links: [] };
     const now = Date.now();
     const demo = snap.mode === 'demo';
-    if (demo) res.caveats.push('All values are DEMO simulation data, not readings from your hardware.');
+    if (demo) res.caveats.push('All values are SIMULATED test data, not readings from your hardware.');
 
     // safety-first intents
     if (/(there'?s|there is|i see|real)\s+(a )?(fire|smoke)|help|emergency|burning|evacuat/.test(t)) {
@@ -38,26 +38,28 @@
             : 'Data is still loading.';
       return res;
     }
-    const S = snap.sensors;
+    const R = ORION.registry;
+    const sensorOf = (type) => R.sensorOfType(snap, type);
+    const missing = (what) => { res.interp = `No ${what} is registered in ORION, so I have no reading to report.`; return res; };
     const fact = (label, value, id, at) => res.facts.push({ label, value, at, status: id ? freshTag(ev, id) : null });
 
     if (/temp|hot|cold|warm|°/.test(t) && !/humid/.test(t)) {
-      const d = S['dht22-living'];
-      const st = freshTag(ev, 'dht22-living');
+      const d = sensorOf('dht22'); if (!d) return missing('temperature sensor');
+      const st = freshTag(ev, d.id);
       if (d.fields.temperature_c == null) {
-        fact('Temperature (DHT22)', 'no valid reading', 'dht22-living', d.recorded_at);
+        fact('Temperature (DHT22)', 'no valid reading', d.id, d.recorded_at);
         res.interp = 'The DHT22 is not giving a valid temperature right now' + (d.fault ? ` (${d.fault})` : '') + '. I can’t tell you the current temperature.';
       } else {
-        fact('Temperature (DHT22 · ' + (cfg.rooms['dht22-living'] || '') + ')', F.temp(d.fields.temperature_c) + ' ' + F.tempUnit(), 'dht22-living', d.recorded_at);
-        fact('Humidity', d.fields.humidity_percent + ' %RH', 'dht22-living', d.recorded_at);
+        fact('Temperature (DHT22 · ' + R.roomOf(cfg, d) + ')', F.temp(d.fields.temperature_c) + ' ' + F.tempUnit(), d.id, d.recorded_at);
+        fact('Humidity', d.fields.humidity_percent + ' %RH', d.id, d.recorded_at);
         res.interp = st === 'fresh' ? 'This is the latest reading and it is within the freshness window.' : `This value is ${st}: it is the last-known reading, not a current one.`;
         if (cfg.thresholds.temp_advisory_c == null) res.caveats.push('No temperature advisory threshold is configured, so I can’t say whether this is “too high”.');
       }
       return res;
     }
     if (/humid/.test(t)) {
-      const d = S['dht22-living'];
-      fact('Humidity (DHT22)', d.fields.humidity_percent == null ? 'no valid reading' : d.fields.humidity_percent + ' %RH', 'dht22-living', d.recorded_at);
+      const d = sensorOf('dht22'); if (!d) return missing('humidity sensor');
+      fact('Humidity (DHT22)', d.fields.humidity_percent == null ? 'no valid reading' : d.fields.humidity_percent + ' %RH', d.id, d.recorded_at);
       res.interp = d.fields.humidity_percent == null ? 'The DHT22 is not providing a valid humidity reading.' : 'Relative humidity from the DHT22. No advisory threshold is set.';
       return res;
     }
@@ -74,12 +76,12 @@
         { smoke: 'the MQ-2 raw reading crossed the configured threshold.', flame: 'the flame sensor reported a detection.', water: 'the water sensor reported wet.', sensor_stale: 'a sensor stopped reporting.', sensor_fault: 'a sensor reported a fault.', controller: 'a controller heartbeat went missing.', gsm: 'the GSM module lost network registration.' }[inc.type];
       res.caveats.push('Responses listed are what the controller reported doing. They are not proof of physical outcomes (no feedback sensors).');
       if (inc.type === 'smoke') res.caveats.push('MQ-2 values are raw ADC, not ppm, and the module is uncalibrated.');
-      res.links.push({ href: '#incidents', label: 'Open Alerts & incidents' });
+      res.links.push({ href: '#alerts', label: 'Open Alerts & incidents' });
       return res;
     }
     if (/water|leak|wet/.test(t)) {
-      const w = S['water-utility'];
-      fact('Water sensor now', `${w.fields.wet ? 'WET' : 'dry'} · raw ${w.fields.raw_adc}`, 'water-utility', w.recorded_at);
+      const w = sensorOf('water'); if (!w) return missing('water sensor');
+      fact('Water sensor now', `${w.fields.wet ? 'WET' : 'dry'} · raw ${w.fields.raw_adc}`, w.id, w.recorded_at);
       const last = snap.incidents.filter((i) => i.type === 'water').sort((a, b) => b.opened_at - a.opened_at)[0];
       if (last) fact('Latest water event', `${last.state === 'cleared' ? 'cleared' : 'ACTIVE'} · opened ${F.dt(last.opened_at)} · raw ${last.snapshot.value}`, null, last.opened_at);
       res.interp = last ? 'That is the most recent water incident in ORION’s history.' : 'No water incidents are on record.';
@@ -87,17 +89,17 @@
       return res;
     }
     if (/smoke|gas|mq|air/.test(t)) {
-      const m = S['mq2-hall'];
-      fact('MQ-2 (raw ADC)', m.quality === 'warming_up' ? `warming up (${m.warmup_remaining_s} s left)` : String(m.fields.raw_adc), 'mq2-hall', m.recorded_at);
-      fact('Firmware thresholds', `warning ${m.fw_threshold.warning} · critical ${m.fw_threshold.critical} (placeholder)`, null, null);
+      const m = sensorOf('mq2'); if (!m) return missing('smoke/gas sensor');
+      fact('MQ-2 (raw ADC)', m.quality === 'warming_up' ? `warming up (${m.warmup_remaining_s} s left)` : String(m.fields.raw_adc), m.id, m.recorded_at);
+      if (m.fw_threshold) fact('Firmware thresholds', `warning ${m.fw_threshold.warning} · critical ${m.fw_threshold.critical} (placeholder)`, null, null);
       fact('Device-reported state', m.state, null, m.recorded_at);
       res.interp = 'The MQ-2 reports a raw ADC count. It indicates relative change, not a gas concentration.';
       res.caveats.push('Raw ADC is not ppm. MQ-2 is not a certified smoke or gas detector.');
       return res;
     }
     if (/flame|fire/.test(t)) {
-      const f = S['flame-kitchen'];
-      fact('Flame sensor', f.fields.detected ? 'DETECTED' : 'not detected', 'flame-kitchen', f.recorded_at);
+      const f = sensorOf('flame'); if (!f) return missing('flame sensor');
+      fact('Flame sensor', f.fields.detected ? 'DETECTED' : 'not detected', f.id, f.recorded_at);
       res.interp = 'Digital flame module reading. Its polarity has not been verified on the real hardware.';
       return res;
     }
@@ -106,13 +108,14 @@
         const o = ev.controllers[k];
         res.facts.push({ label: c.name, value: (o.online ? 'online' : 'NO HEARTBEAT') + ' · last seen ' + F.ago(c.last_seen_at, now) + ' · fw ' + c.firmware_version, at: c.last_seen_at, status: o.online ? 'fresh' : 'STALE' });
       }
-      res.interp = 'Online means a heartbeat arrived within the configured interval. Board roles are a demo assumption pending confirmation.';
+      res.interp = 'Online means a heartbeat arrived within the configured interval. In ORION the UNO reads the sensors and drives the outputs; the ESP32 is the gateway to the server and the GSM module.';
       return res;
     }
     if (/gsm|sms|call|sim|modem|text/.test(t)) {
       const g = snap.gsm;
+      if (!g) return missing('GSM module');
       res.facts.push({ label: 'SIM800C', value: ev.gsm.reported ? (g.network_registered ? `registered · CSQ ${g.csq}` : 'NOT registered') : 'no status report', at: g.last_report_at, status: ev.gsm.reported ? 'fresh' : 'STALE' });
-      const a = snap.gsmAttempts[0];
+      const a = (snap.gsmAttempts || [])[0];
       if (a) fact('Last attempt', `${a.type.toUpperCase()} · ${a.status} · ${a.note}`, null, a.updated_at);
       res.interp = 'A controller being online does not mean GSM works. SMS and calls are reported separately, and “sent” means the modem accepted it, not that it was delivered.';
       return res;
@@ -124,7 +127,7 @@
       res.caveats.push('ORION is a prototype, not a certified fire alarm or gas detector.');
       return res;
     }
-    res.interp = 'In this Phase 1 mock I can answer about temperature, humidity, smoke (MQ-2), flame, water, controllers, GSM, incidents and overall status.';
+    res.interp = 'In basic mode (no AI connected) I can answer about temperature, humidity, smoke (MQ-2), flame, water, controllers, GSM, incidents and overall status.';
     return res;
   }
 

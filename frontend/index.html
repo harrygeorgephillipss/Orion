@@ -444,7 +444,7 @@ details.more>summary::-webkit-details-marker{display:none}
 </head>
 <body>
 <a class="skip" href="#view">Skip to content</a>
-<div class="demo-bar" id="demoBar" role="note"><span><b>Demo</b> · simulated data, no hardware connected</span><button class="demo-btn" data-action="drawer-open">Try a scenario · <span id="scName"></span></button></div>
+<div class="demo-bar" id="demoBar" role="note"><span><b>SIMULATION</b> · every value is invented test data — no hardware is connected</span><button class="demo-btn" data-action="drawer-open">Scenario · <span id="scName"></span></button></div>
 <header class="hd">
   <a class="brand" href="#home" aria-label="ORION home">
     <svg viewBox="0 0 32 32" width="24" height="24" aria-hidden="true"><circle cx="16" cy="16" r="14.5" fill="none" stroke="currentColor" stroke-opacity=".3"/><circle cx="10" cy="18.5" r="2" fill="currentColor"/><circle cx="16" cy="16" r="2.3" fill="currentColor"/><circle cx="22" cy="13.5" r="2" fill="currentColor"/></svg>
@@ -519,7 +519,7 @@ ORION.defaultConfig = function () {
 
 /* Decisions the brief says must not be guessed. Shown across the app. */
 ORION.pending = [
-  { key: 'boards', title: 'UNO vs ESP32 responsibilities', detail: 'Demo routes all telemetry through the ESP32 as gateway. This is an illustrative assumption, not the real wiring.' },
+  { key: 'boards', title: 'UNO vs ESP32 responsibilities', detail: 'Planned (docs/hardware-architecture.md): the UNO reads all sensors and drives all outputs; the ESP32 is the Wi-Fi/MQTT gateway and runs the SIM800C. Not yet built or tested on hardware.' },
   { key: 'pins', title: 'Pin map and actual wiring', detail: 'No pins are shown or assumed anywhere in ORION.' },
   { key: 'mq2', title: 'MQ-2 calibration and thresholds', detail: 'Values are raw ADC, not ppm. 350/500 are placeholder thresholds.' },
   { key: 'mq2_level', title: 'Which MQ-2 level triggers local actions', detail: 'Demo firmware triggers fan, buzzer, LEDs and door at the warning threshold.' },
@@ -531,11 +531,11 @@ ORION.pending = [
   { key: 'smoke_sms', title: 'Smoke → SMS/call policy', detail: 'Not specified in the brief. No SMS is sent for smoke in the demo.' },
   { key: 'dht', title: 'DHT22 wiring, read interval and advisory thresholds', detail: 'Advisory thresholds are unset.' },
   { key: 'relay', title: 'Relay channel count, mapping and active level', detail: 'Not assumed active-LOW. Demo maps CH1 to the fan as an illustration.' },
-  { key: 'mist', title: 'Mist maker purpose and interlocks', detail: 'Remote control disabled. Never activated automatically.' },
+  { key: 'mist', title: 'Mist maker', detail: 'Not in the current hardware inventory. Kept as a disabled placeholder; never activated automatically.' },
   { key: 'sg90', title: 'SG90 mechanical purpose', detail: 'Generic servo card only.' },
   { key: 'door', title: 'MG995 door policy', detail: 'MQ-2 only, 180° for 5 s (latest request). What happens after 5 s is unconfirmed; demo returns to 0°. Needs safety review before any real door.' },
   { key: 'gsm', title: 'SIM800C power and AT response reporting', detail: 'SIM800C is 2G-only. A Jio SIM will not register; use a 2G-capable network.' },
-  { key: 'hosting', title: 'Backend, hosting and authentication', detail: 'Phase 1 runs entirely in the browser with demo data.' },
+  { key: 'hosting', title: 'Where the ORION server runs', detail: 'LAN PC / Raspberry Pi or a cloud VPS. Simulation mode runs entirely in the browser.' },
   { key: 'recipients', title: 'Notification recipients', detail: 'None configured. Real alerts are disabled.' },
 ];
 
@@ -595,6 +595,89 @@ ORION.fmt = (function () {
   };
 })();
 
+/* ORION device registry helpers.
+ *
+ * The UI must not assume particular sensor or controller IDs: the live backend registers devices with its own IDs.
+ * A snapshot carries `sensors` (keyed by sensor id, each with a `type`) and `controllers` (keyed by controller key,
+ * one of which may be flagged `is_gateway`). Everything else (tiles, chart series, Aura context, settings rows)
+ * is derived here from those objects.
+ *
+ * Series keys identify one measured quantity of one sensor: `<sensor_id>:<metric>`, e.g. `mq2-hall:mq2`.
+ */
+'use strict';
+(function () {
+  /* Sensor types ORION understands, in display order, with the metrics each one produces. */
+  const TYPES = {
+    mq2: { name: 'Smoke & gas', metrics: ['mq2'] },
+    flame: { name: 'Flame', metrics: ['flame'] },
+    water: { name: 'Water leak', metrics: ['water'] },
+    dht22: { name: 'Temperature & humidity', metrics: ['temp', 'hum'] },
+  };
+  const TYPE_ORDER = Object.keys(TYPES);
+
+  /* One measured quantity. `field` is the key inside sensor.fields. */
+  const METRICS = {
+    mq2: { type: 'mq2', field: 'raw_adc', name: 'Smoke & gas', label: 'MQ-2 (raw ADC)', unit: 'ADC', dp: 0, icon: 'smoke', color: '#f0a35e', aura: 'smoke' },
+    flame: { type: 'flame', field: 'detected', name: 'Flame', label: 'Flame (detected)', unit: '0/1', dp: 0, icon: 'flame', color: '#ff6b6b', aura: 'flame' },
+    water: { type: 'water', field: 'raw_adc', name: 'Water leak', label: 'Water (raw ADC)', unit: 'ADC', dp: 0, icon: 'water', color: '#7aa8ff', aura: 'water' },
+    temp: { type: 'dht22', field: 'temperature_c', name: 'Temperature', label: 'Temperature', unit: '°C', dp: 1, icon: 'temp', color: '#ff8a7a', aura: 'temperature' },
+    hum: { type: 'dht22', field: 'humidity_percent', name: 'Humidity', label: 'Humidity', unit: '%RH', dp: 1, icon: 'hum', color: '#6cc6e8', aura: 'humidity' },
+  };
+
+  const sensorList = (snap) => {
+    if (!snap || !snap.sensors) return [];
+    return Object.values(snap.sensors).sort((a, b) => {
+      const ta = TYPE_ORDER.indexOf(a.type), tb = TYPE_ORDER.indexOf(b.type);
+      return (ta < 0 ? 99 : ta) - (tb < 0 ? 99 : tb) || String(a.id).localeCompare(String(b.id));
+    });
+  };
+  const sensorIds = (snap) => sensorList(snap).map((s) => s.id);
+  /* First sensor of a type (most homes have one of each). */
+  const sensorOfType = (snap, type) => sensorList(snap).find((s) => s.type === type) || null;
+
+  const seriesKey = (sensorId, metric) => `${sensorId}:${metric}`;
+  function parseSeries(key) {
+    const s = String(key || ''), i = s.lastIndexOf(':');
+    return i < 0 ? { sensorId: null, metric: s } : { sensorId: s.slice(0, i), metric: s.slice(i + 1) };
+  }
+  /* All chart series available in a snapshot, in display order. */
+  function seriesList(snap) {
+    const out = [];
+    for (const s of sensorList(snap)) {
+      const t = TYPES[s.type]; if (!t) continue;
+      for (const m of t.metrics) out.push(Object.assign({ key: seriesKey(s.id, m), sensorId: s.id, metric: m }, METRICS[m]));
+    }
+    return out;
+  }
+  function seriesInfo(key) {
+    const p = parseSeries(key), m = METRICS[p.metric];
+    return m ? Object.assign({ key, sensorId: p.sensorId, metric: p.metric }, m) : null;
+  }
+  /* Series for the first sensor of the metric's type (used by Aura's sensor names). */
+  function seriesForMetric(snap, metric) {
+    const m = METRICS[metric]; if (!m) return null;
+    const s = sensorOfType(snap, m.type);
+    return s ? seriesKey(s.id, metric) : null;
+  }
+
+  /* Controller that relays telemetry to the backend (ESP32 in the ORION design). */
+  function gatewayKey(snap) {
+    if (!snap || !snap.controllers) return null;
+    const e = Object.entries(snap.controllers).find(([, c]) => c.is_gateway);
+    return e ? e[0] : null;
+  }
+  function controllerKeyById(snap, id) {
+    if (!snap || !snap.controllers) return null;
+    const e = Object.entries(snap.controllers).find(([k, c]) => c.id === id || k === id);
+    return e ? e[0] : null;
+  }
+
+  /* Room shown for a sensor: owner's label in settings, else what the backend reports. */
+  const roomOf = (cfg, sensor) => (cfg && cfg.rooms && cfg.rooms[sensor.id]) || sensor.room || '';
+
+  ORION.registry = { TYPES, TYPE_ORDER, METRICS, sensorList, sensorIds, sensorOfType, seriesKey, parseSeries, seriesList, seriesInfo, seriesForMetric, gatewayKey, controllerKeyById, roomOf };
+})();
+
 /* ORION telemetry sources.
  *
  * ADAPTER BOUNDARY: the UI talks only to an object with this interface.
@@ -631,13 +714,8 @@ ORION.fmt = (function () {
     { id: 'no_data', label: 'No data yet', group: 'App states', hint: 'Fresh install, nothing received.' },
   ];
 
-  const SERIES = {
-    mq2: { sensor: 'mq2-hall', label: 'MQ-2 (raw ADC)', unit: 'ADC', field: 'raw_adc', dp: 0 },
-    temp: { sensor: 'dht22-living', label: 'Temperature', unit: '°C', field: 'temperature_c', dp: 1 },
-    hum: { sensor: 'dht22-living', label: 'Humidity', unit: '%RH', field: 'humidity_percent', dp: 1 },
-    water: { sensor: 'water-utility', label: 'Water (raw ADC)', unit: 'ADC', field: 'raw_adc', dp: 0 },
-    flame: { sensor: 'flame-kitchen', label: 'Flame (detected)', unit: '0/1', field: 'detected', dp: 0 },
-  };
+  /* Which sensor produces each simulated metric (history arrays are kept per metric). */
+  const SIM_SENSOR = { mq2: 'mq2-hall', flame: 'flame-kitchen', water: 'water-utility', temp: 'dht22-living', hum: 'dht22-living' };
 
   /* Kerala-like diurnal pattern, peak mid-afternoon IST (≈08:30 UTC). */
   function diurnal(ms) {
@@ -648,7 +726,7 @@ ORION.fmt = (function () {
   class DemoSource {
     constructor(seed) {
       this.kind = 'demo';
-      this.label = 'Demo simulation';
+      this.label = 'Simulation';
       this.seed = seed || 20261115;
       this.rand = U.mulberry32(this.seed + 7);
       this.scenario = 'normal';
@@ -663,7 +741,7 @@ ORION.fmt = (function () {
       this.seqGaps = 0;
       this._buildHistory();
       this._initLive();
-      this._log('info', 'Demo source started (seed ' + this.seed + '). No hardware is connected.');
+      this._log('info', 'Simulation started (seed ' + this.seed + '). No hardware is connected — every value is simulated.');
     }
 
     /* ---------- history (deterministic) ---------- */
@@ -815,21 +893,21 @@ ORION.fmt = (function () {
       const lastHum = this.hist.hum[this.hist.hum.length - 1];
       this.cur = { mq2: 175, temp: lastTemp ? lastTemp.v : 29, hum: lastHum ? lastHum.v : 72, water: 34, flame: 0 };
       this.sensors = {
-        'mq2-hall': { id: 'mq2-hall', type: 'mq2', label: 'MQ-2 smoke / gas', controller: 'esp32', unit: 'adc_raw', fields: { raw_adc: 175 }, state: 'normal', quality: 'valid', recorded_at: now, received_at: now, sequence: 0, calibration: 'uncalibrated_raw' },
-        'flame-kitchen': { id: 'flame-kitchen', type: 'flame', label: 'Flame sensor', controller: 'esp32', unit: 'digital', fields: { detected: false, digital_value: 1 }, state: 'normal', quality: 'valid', recorded_at: now, received_at: now, sequence: 0, polarity: 'active LOW (demo assumption)' },
-        'water-utility': { id: 'water-utility', type: 'water', label: 'Water sensor', controller: 'esp32', unit: 'adc_raw', fields: { raw_adc: 34, wet: false }, state: 'normal', quality: 'valid', recorded_at: now, received_at: now, sequence: 0 },
-        'dht22-living': { id: 'dht22-living', type: 'dht22', label: 'DHT22 temperature / humidity', controller: 'esp32', unit: 'c_rh', fields: { temperature_c: this.cur.temp, humidity_percent: this.cur.hum }, state: 'normal', quality: 'valid', recorded_at: now, received_at: now, sequence: 0 },
+        'mq2-hall': { id: 'mq2-hall', type: 'mq2', label: 'MQ-2 smoke / gas', controller: 'uno', simulated: true, unit: 'adc_raw', fields: { raw_adc: 175 }, state: 'normal', quality: 'valid', recorded_at: now, received_at: now, sequence: 0, calibration: 'uncalibrated_raw' },
+        'flame-kitchen': { id: 'flame-kitchen', type: 'flame', label: 'Flame sensor', controller: 'uno', simulated: true, unit: 'digital', fields: { detected: false, digital_value: 1 }, state: 'normal', quality: 'valid', recorded_at: now, received_at: now, sequence: 0, polarity: 'active LOW (demo assumption)' },
+        'water-utility': { id: 'water-utility', type: 'water', label: 'Water sensor', controller: 'uno', simulated: true, unit: 'adc_raw', fields: { raw_adc: 34, wet: false }, state: 'normal', quality: 'valid', recorded_at: now, received_at: now, sequence: 0 },
+        'dht22-living': { id: 'dht22-living', type: 'dht22', label: 'DHT22 temperature / humidity', controller: 'uno', simulated: true, unit: 'c_rh', fields: { temperature_c: this.cur.temp, humidity_percent: this.cur.hum }, state: 'normal', quality: 'valid', recorded_at: now, received_at: now, sequence: 0 },
       };
       this.controllers = {
-        uno: { id: 'orion-uno-01', name: 'Arduino UNO', role: 'Controller — role pending confirmation', online: true, last_seen_at: now, firmware_version: '0.1.0-demo', boot_reason: 'power_on', link: 'Serial to ESP32 (demo assumption)', logic: '5 V' },
-        esp32: { id: 'orion-esp32-01', name: 'ESP32', role: 'Gateway (demo assumption)', online: true, last_seen_at: now, firmware_version: '0.1.0-demo', boot_reason: 'power_on', wifi_rssi_dbm: -58, uptime_s: 5 * 3600 + 12 * 60, logic: '3.3 V (not 5 V tolerant)' },
+        uno: { id: 'orion-uno-01', name: 'Arduino UNO', role: 'Safety controller — reads sensors, drives outputs', is_gateway: false, simulated: true, online: true, last_seen_at: now, firmware_version: '0.1.0-sim', boot_reason: 'power_on', link: 'UART to ESP32 via level shifter', logic: '5 V' },
+        esp32: { id: 'orion-esp32-01', name: 'ESP32', role: 'Gateway — Wi-Fi/MQTT to server, SIM800C', is_gateway: true, simulated: true, online: true, last_seen_at: now, firmware_version: '0.1.0-sim', boot_reason: 'power_on', wifi_rssi_dbm: -58, uptime_s: 5 * 3600 + 12 * 60, logic: '3.3 V (not 5 V tolerant)' },
       };
-      this.gsm = { id: 'orion-sim800c-01', module: 'SIM800C', network_registered: true, operator: 'Demo 2G network', csq: 17, last_report_at: now, power: 'external supply (unconfirmed)' };
+      this.gsm = { id: 'orion-sim800c-01', module: 'SIM800C', simulated: true, network_registered: true, operator: 'Simulated 2G network', csq: 17, last_report_at: now, power: 'external supply (unconfirmed)' };
       this.fw = { smoke: false, smokeLevel: 'normal', flame: false, water: false, fanCooldownUntil: null, doorUntil: null, manualFan: null, buzzerTestUntil: null, normalSince: {} };
       this.act = {
         fan: { id: 'fan', name: '12 V exhaust fan', commanded: 'off', by: 'firmware', last_changed_at: now - 26 * HOUR, feedback: false },
-        relay: { id: 'relay', name: '5 V relay module', channels: [{ ch: 1, load: 'Exhaust fan (demo mapping, unverified)', commanded: 'de-energised' }], active_level: 'unverified', feedback: false },
-        mist: { id: 'mist', name: 'Mist maker', commanded: 'off', interlock: 'undefined', remote: 'disabled', feedback: false },
+        relay: { id: 'relay', name: '5 V relay module', channels: [{ ch: 1, load: 'Exhaust fan (planned mapping, unverified)', commanded: 'de-energised' }], active_level: 'unverified', feedback: false },
+        mist: { id: 'mist', name: 'Mist maker', installed: false, commanded: 'off', interlock: 'undefined', remote: 'disabled', feedback: false },
         mg995: { id: 'mg995', name: 'MG995 servo — model door', target_angle: 0, duration_s: null, command_time: now - 26 * HOUR, reported_position: null, feedback: false },
         sg90: { id: 'sg90', name: 'SG90 servo — purpose pending', target_angle: null, command_time: null, reported_position: null, feedback: false },
         buzzer: { id: 'buzzer', name: 'Buzzer', commanded: 'off', pattern: null, incident_id: null, feedback: false },
@@ -896,7 +974,8 @@ ORION.fmt = (function () {
       /* --- simulated local firmware (runs even when the gateway is offline) --- */
       this._firmware(now);
 
-      /* --- telemetry reaching the backend --- */
+      /* --- telemetry reaching the backend ---
+         Sensors are read by the UNO and relayed by the ESP32, so both links must be up for fresh readings. */
       if (gatewayUp) {
         // occasional dropped packet → sequence gap (deterministic)
         if (this.tickN % 157 === 0) { this.seq.esp32++; this.seqGaps++; this._log('warn', 'Sequence gap detected on orion-esp32-01 (1 message missing)'); }
@@ -904,45 +983,47 @@ ORION.fmt = (function () {
         const rec = now - 300 - Math.floor(r() * 500);
         const s = this.sensors;
         const fw = this.fwThresholds;
-        // MQ-2
-        const mqv = Math.round(U.clamp(this.cur.mq2, 0, 1023));
-        const warm = this.warmupUntil && now < this.warmupUntil;
-        if (this.warmupUntil && now >= this.warmupUntil) {
-          this.warmupUntil = null;
-          if (sc === 'mq2_warmup') { this.scenario = 'normal'; this._event('info', 'MQ-2 · Hall', 'MQ-2 warm-up complete'); }
-        }
-        Object.assign(s['mq2-hall'], {
-          fields: { raw_adc: mqv }, quality: warm ? 'warming_up' : 'valid',
-          warmup_remaining_s: warm ? Math.ceil((this.warmupUntil - now) / 1000) : 0,
-          state: warm ? 'unknown' : mqv >= fw.mq2_critical ? 'critical' : mqv >= fw.mq2_warning ? 'warning' : 'normal',
-          recorded_at: rec, received_at: recv, sequence: ++this.seq.esp32,
-          fw_threshold: { warning: fw.mq2_warning, critical: fw.mq2_critical },
-        });
-        this._push('mq2', rec, recv, warm ? null : mqv, warm ? 'warming_up' : 'valid');
-        // flame (active LOW demo assumption: digital 0 = detected)
-        Object.assign(s['flame-kitchen'], {
-          fields: { detected: !!flame, digital_value: flame ? 0 : 1 }, quality: 'valid',
-          state: flame ? 'critical' : 'normal', recorded_at: rec, received_at: recv, sequence: ++this.seq.esp32,
-        });
-        this._push('flame', rec, recv, flame, 'valid');
-        // water
-        const wv = Math.round(U.clamp(this.cur.water, 0, 1023));
-        const wet = wv >= fw.water_wet;
-        Object.assign(s['water-utility'], {
-          fields: { raw_adc: wv, wet }, quality: 'valid', state: wet ? 'warning' : 'normal',
-          recorded_at: rec, received_at: recv, sequence: ++this.seq.esp32, fw_threshold: { wet: fw.water_wet },
-        });
-        this._push('water', rec, recv, wv, 'valid');
-        // DHT22
-        if (sc === 'dht_fault') {
-          Object.assign(s['dht22-living'], { fields: { temperature_c: null, humidity_percent: null }, quality: 'fault', fault: 'read failure (checksum / timeout)', state: 'unknown', recorded_at: rec, received_at: recv, sequence: ++this.seq.esp32 });
-          if (this.tickN % 3 === 0) this._log('warn', 'dht22-living: read failure reported by controller');
-        } else if (sc !== 'dht_stale') {
-          const tv = +this.cur.temp.toFixed(1), hv = +U.clamp(this.cur.hum, 0, 100).toFixed(1);
-          Object.assign(s['dht22-living'], { fields: { temperature_c: tv, humidity_percent: hv }, quality: 'valid', fault: null, state: 'normal', recorded_at: rec, received_at: recv, sequence: ++this.seq.esp32 });
-          this._push('temp', rec, recv, tv, 'valid');
-          this._push('hum', rec, recv, hv, 'valid');
-        }
+        if (unoUp) {
+          // MQ-2
+          const mqv = Math.round(U.clamp(this.cur.mq2, 0, 1023));
+          const warm = this.warmupUntil && now < this.warmupUntil;
+          if (this.warmupUntil && now >= this.warmupUntil) {
+            this.warmupUntil = null;
+            if (sc === 'mq2_warmup') { this.scenario = 'normal'; this._event('info', 'MQ-2 · Hall', 'MQ-2 warm-up complete'); }
+          }
+          Object.assign(s['mq2-hall'], {
+            fields: { raw_adc: mqv }, quality: warm ? 'warming_up' : 'valid',
+            warmup_remaining_s: warm ? Math.ceil((this.warmupUntil - now) / 1000) : 0,
+            state: warm ? 'unknown' : mqv >= fw.mq2_critical ? 'critical' : mqv >= fw.mq2_warning ? 'warning' : 'normal',
+            recorded_at: rec, received_at: recv, sequence: ++this.seq.esp32,
+            fw_threshold: { warning: fw.mq2_warning, critical: fw.mq2_critical },
+          });
+          this._push('mq2', rec, recv, warm ? null : mqv, warm ? 'warming_up' : 'valid');
+          // flame (active LOW demo assumption: digital 0 = detected)
+          Object.assign(s['flame-kitchen'], {
+            fields: { detected: !!flame, digital_value: flame ? 0 : 1 }, quality: 'valid',
+            state: flame ? 'critical' : 'normal', recorded_at: rec, received_at: recv, sequence: ++this.seq.esp32,
+          });
+          this._push('flame', rec, recv, flame, 'valid');
+          // water
+          const wv = Math.round(U.clamp(this.cur.water, 0, 1023));
+          const wet = wv >= fw.water_wet;
+          Object.assign(s['water-utility'], {
+            fields: { raw_adc: wv, wet }, quality: 'valid', state: wet ? 'warning' : 'normal',
+            recorded_at: rec, received_at: recv, sequence: ++this.seq.esp32, fw_threshold: { wet: fw.water_wet },
+          });
+          this._push('water', rec, recv, wv, 'valid');
+          // DHT22
+          if (sc === 'dht_fault') {
+            Object.assign(s['dht22-living'], { fields: { temperature_c: null, humidity_percent: null }, quality: 'fault', fault: 'read failure (checksum / timeout)', state: 'unknown', recorded_at: rec, received_at: recv, sequence: ++this.seq.esp32 });
+            if (this.tickN % 3 === 0) this._log('warn', 'dht22-living: read failure reported by controller');
+          } else if (sc !== 'dht_stale') {
+            const tv = +this.cur.temp.toFixed(1), hv = +U.clamp(this.cur.hum, 0, 100).toFixed(1);
+            Object.assign(s['dht22-living'], { fields: { temperature_c: tv, humidity_percent: hv }, quality: 'valid', fault: null, state: 'normal', recorded_at: rec, received_at: recv, sequence: ++this.seq.esp32 });
+            this._push('temp', rec, recv, tv, 'valid');
+            this._push('hum', rec, recv, hv, 'valid');
+          }
+        } // unoUp
         // controllers
         this.controllers.esp32.online = true;
         this.controllers.esp32.last_seen_at = recv;
@@ -953,11 +1034,11 @@ ORION.fmt = (function () {
         this.gsmOutage = sc === 'gsm_outage';
         this.gsm.network_registered = !this.gsmOutage;
         this.gsm.csq = this.gsmOutage ? 99 : 15 + Math.round(r() * 4);
-        this.gsm.operator = this.gsmOutage ? null : 'Demo 2G network';
+        this.gsm.operator = this.gsmOutage ? null : 'Simulated 2G network';
         this.gsm.last_report_at = recv;
       }
       this._progressGsm(now);
-      this._progressCommands(now, gatewayUp);
+      this._progressCommands(now, gatewayUp && unoUp);
       this._incidentEngine(now);
       this._emit();
     }
@@ -1060,9 +1141,11 @@ ORION.fmt = (function () {
       const hb = (ORION.app ? ORION.app.config.freshness.heartbeat_s : 20) * 1000;
       const CLEAR_HOLD = 10e3;
       const sensors = this.sensors;
+      const BASE = { mq2: 'MQ-2', flame: 'Flame sensor', water: 'Water sensor', dht22: 'DHT22' };
       const labelOf = (id) => {
-        const room = ORION.app ? ORION.app.config.rooms[id] : '';
-        const base = { 'mq2-hall': 'MQ-2', 'flame-kitchen': 'Flame sensor', 'water-utility': 'Water sensor', 'dht22-living': 'DHT22' }[id] || id;
+        const s = sensors[id];
+        const room = s && ORION.app ? ORION.registry.roomOf(ORION.app.config, s) : '';
+        const base = (s && BASE[s.type]) || id;
         return room ? `${base} · ${room}` : base;
       };
       const conds = [];
@@ -1076,15 +1159,18 @@ ORION.fmt = (function () {
       if (!stale(wa) && wa.state === 'warning') conds.push({ key: 'water', type: 'water', source_id: wa.id, severity: 'warning', value: wa.fields.raw_adc, unit: 'adc_raw', threshold: `wet ≥ ${wa.fw_threshold ? wa.fw_threshold.wet : 300} (placeholder)` });
       // degraded conditions
       // When the gateway is down, report one root-cause incident instead of one per downstream sensor.
-      const gatewayDown = now - this.controllers.esp32.last_seen_at > hb;
+      const gw = Object.values(this.controllers).find((c) => c.is_gateway);
+      const gatewayDown = now - gw.last_seen_at > hb;
+      const ctrlDown = (k) => this.controllers[k] && now - this.controllers[k].last_seen_at > hb;
       for (const s of Object.values(sensors)) {
         if (gatewayDown) break;
+        if (stale(s) && ctrlDown(s.controller)) continue; // root cause is the controller, reported below
         if (stale(s)) conds.push({ key: 'stale:' + s.id, type: 'sensor_stale', source_id: s.id, severity: 'degraded', value: 'no readings', unit: '', threshold: `freshness ${fresh / 1000} s` });
         else if (s.quality === 'fault') conds.push({ key: 'fault:' + s.id, type: 'sensor_fault', source_id: s.id, severity: 'degraded', value: s.fault || 'fault', unit: '', threshold: 'quality = valid' });
       }
       for (const c of Object.values(this.controllers)) {
-        if (gatewayDown && c.id !== 'orion-esp32-01') continue;
-        if (now - c.last_seen_at > hb) conds.push({ key: 'hb:' + c.id, type: 'controller', source_id: c.id, severity: 'degraded', value: c.id === 'orion-esp32-01' && gatewayDown ? 'gateway heartbeat missing — all telemetry stale' : 'heartbeat missing', unit: '', threshold: `heartbeat ${hb / 1000} s`, label: c.name });
+        if (gatewayDown && c !== gw) continue;
+        if (now - c.last_seen_at > hb) conds.push({ key: 'hb:' + c.id, type: 'controller', source_id: c.id, severity: 'degraded', value: c === gw ? 'gateway heartbeat missing — all telemetry stale' : 'heartbeat missing — its sensors are stale', unit: '', threshold: `heartbeat ${hb / 1000} s`, label: c.name });
       }
       if (now - this.gsm.last_report_at <= hb && !this.gsm.network_registered) conds.push({ key: 'gsm', type: 'gsm', source_id: this.gsm.id, severity: 'degraded', value: 'not registered', unit: '', threshold: 'network registered', label: 'SIM800C GSM' });
 
@@ -1171,7 +1257,7 @@ ORION.fmt = (function () {
       if (sc === 'backend_error') return { status: 'error', error: { code: 503, message: 'GET /api/v1/overview failed: 503 Service Unavailable (simulated)' }, at: Date.now() };
       if (sc === 'no_data') return { status: 'empty', at: Date.now() };
       return {
-        status: 'ok', mode: 'demo', at: Date.now(),
+        status: 'ok', mode: 'demo', simulated: true, at: Date.now(),
         sensors: this.sensors, controllers: this.controllers, gsm: this.gsm, gsmAttempts: this.gsmAttempts,
         actuators: this.act, incidents: this.incidents, events: this.events, commands: this.commands, logs: this.logs,
         fwThresholds: this.fwThresholds, fwState: { fanCooldownRemaining: this.act.fan.cooldown_remaining_s, smoke: this.fw.smoke, flame: this.fw.flame },
@@ -1179,10 +1265,12 @@ ORION.fmt = (function () {
       };
     }
 
-    history(series, from, to) {
+    history(key, from, to) {
       if (this.scenario === 'no_data') return [];
+      const { sensorId, metric } = ORION.registry.parseSeries(key);
+      if (sensorId && SIM_SENSOR[metric] !== sensorId) return [];
       const out = [];
-      for (const arr of [this.hist[series], this.live[series]]) {
+      for (const arr of [this.hist[metric], this.live[metric]]) {
         if (!arr) continue;
         for (const p of arr) if (p.t >= from && p.t <= to) out.push(p);
       }
@@ -1208,7 +1296,7 @@ ORION.fmt = (function () {
       this.commands.unshift(cmd);
       this._log('info', `audit: command.create ${cmd.id} ${actuator}:${action} by ${actor}`);
       this._emit();
-      return cmd;
+      return { ok: true, command: cmd };
     }
 
     _progressCommands(now, gatewayUp) {
@@ -1247,68 +1335,81 @@ ORION.fmt = (function () {
     snapshot() { return { status: 'unconfigured', message: 'No ORION backend is configured. Live telemetry arrives in Phase 2 (backend + ESP32 gateway).' }; }
     history() { return []; }
     acknowledge() { return { ok: false, error: 'No backend configured' }; }
-    command() { return null; }
+    command() { return { ok: false, error: 'No backend configured — the command was not sent.' }; }
     setScenario() {}
   }
 
-  ORION.sources = { DemoSource, LiveSource, SCENARIOS, SERIES };
+  ORION.sources = { DemoSource, LiveSource, SCENARIOS, SIM_SENSOR };
 })();
 
 /* ORION health evaluation: freshness, sensor status and overall system state.
  * Precedence: OFFLINE (no valid controller link) > EMERGENCY > ATTENTION > DEGRADED > NORMAL.
- * A degraded condition never hides an emergency; stale/missing data never shows NORMAL. */
+ * A degraded condition never hides an emergency; stale/missing data never shows NORMAL.
+ * Sensors and controllers come from the snapshot (see registry.js) — no IDs are assumed. */
 'use strict';
 (function () {
-  const SENSOR_ORDER = ['mq2-hall', 'flame-kitchen', 'water-utility', 'dht22-living'];
+  const R = ORION.registry;
 
   function evaluate(snap, cfg, now) {
     now = now || Date.now();
-    const out = { status: snap.status, system: null, reasons: [], notes: [], sensors: {}, controllers: {}, gsm: null, active: [], lastKnown: null, now };
+    const out = { status: snap.status, system: null, reasons: [], notes: [], sensors: {}, controllers: {}, gsm: null, active: [], lastKnown: null, now, gateway: null };
     if (snap.status === 'loading') { out.system = 'LOADING'; return out; }
-    if (snap.status === 'error') { out.system = 'OFFLINE'; out.reasons.push('Backend error: ' + snap.error.message); out.backendError = true; return out; }
+    if (snap.status === 'error') { out.system = 'OFFLINE'; out.reasons.push('Backend error: ' + ((snap.error && snap.error.message) || 'unknown error')); out.backendError = true; return out; }
     if (snap.status === 'empty') { out.system = 'OFFLINE'; out.reasons.push('No telemetry has been received yet.'); out.noData = true; return out; }
-    if (snap.status === 'unconfigured') { out.system = 'OFFLINE'; out.reasons.push(snap.message); out.unconfigured = true; return out; }
+    if (snap.status === 'unconfigured') { out.system = 'OFFLINE'; out.reasons.push(snap.message || 'No data source configured.'); out.unconfigured = true; return out; }
+    if (snap.status === 'auth') { out.system = 'OFFLINE'; out.reasons.push(snap.message || 'Sign in to see live data.'); out.needsAuth = true; return out; }
 
     const fresh = cfg.freshness.sensor_s * 1000, hb = cfg.freshness.heartbeat_s * 1000;
-    for (const id of SENSOR_ORDER) {
-      const s = snap.sensors[id];
-      if (!s) { out.sensors[id] = { status: 'no_data', age: null }; continue; }
-      const age = now - s.received_at;
+    for (const [k, c] of Object.entries(snap.controllers || {})) {
+      const age = c.last_seen_at == null ? Infinity : now - c.last_seen_at;
+      out.controllers[k] = { online: age <= hb, age };
+    }
+    const sensors = R.sensorList(snap);
+    for (const s of sensors) {
+      const age = s.received_at == null ? Infinity : now - s.received_at;
+      const ck = s.controller && out.controllers[s.controller] ? s.controller : null;
       let status = 'live';
       if (age > fresh) status = 'stale';
       else if (s.quality === 'fault') status = 'fault';
       else if (s.quality === 'warming_up') status = 'warming_up';
       else if (s.quality === 'disconnected') status = 'disconnected';
-      out.sensors[id] = { status, age, stale: age > fresh };
+      out.sensors[s.id] = { status, age, stale: age > fresh, controllerOffline: !!(ck && !out.controllers[ck].online) };
     }
-    for (const [k, c] of Object.entries(snap.controllers)) {
-      const age = now - c.last_seen_at;
-      out.controllers[k] = { online: age <= hb, age };
-    }
-    const gAge = now - snap.gsm.last_report_at;
-    out.gsm = { reported: gAge <= hb, age: gAge, registered: gAge <= hb && snap.gsm.network_registered };
+    const g = snap.gsm || null;
+    if (g) {
+      const gAge = g.last_report_at == null ? Infinity : now - g.last_report_at;
+      out.gsm = { reported: gAge <= hb, age: gAge, registered: gAge <= hb && !!g.network_registered };
+    } else out.gsm = { reported: false, age: Infinity, registered: false, missing: true };
 
-    out.active = snap.incidents.filter((i) => i.state !== 'cleared');
+    out.active = (snap.incidents || []).filter((i) => i.state !== 'cleared');
     const hazards = out.active.filter((i) => i.severity === 'critical' || i.severity === 'warning');
     const crit = hazards.some((i) => i.severity === 'critical');
 
     const degraded = [];
-    for (const id of SENSOR_ORDER) {
-      const st = out.sensors[id].status;
-      const name = snap.sensors[id] ? snap.sensors[id].label : id;
-      if (st === 'stale') degraded.push(`${name}: no reading for ${Math.round(out.sensors[id].age / 1000)} s`);
-      if (st === 'fault') degraded.push(`${name}: sensor fault reported`);
-      if (st === 'warming_up') degraded.push(`${name}: warming up — readings not yet valid`);
-      if (st === 'disconnected') degraded.push(`${name}: disconnected`);
+    const secs = (ms) => (ms === Infinity ? 'ever' : Math.round(ms / 1000) + ' s');
+    for (const s of sensors) {
+      const e = out.sensors[s.id], name = s.label || s.id;
+      if (e.status === 'stale' && e.controllerOffline) continue; // reported once, as its controller
+      if (e.status === 'stale') degraded.push(`${name}: no reading for ${secs(e.age)}`);
+      if (e.status === 'fault') degraded.push(`${name}: sensor fault reported`);
+      if (e.status === 'warming_up') degraded.push(`${name}: warming up — readings not yet valid`);
+      if (e.status === 'disconnected') degraded.push(`${name}: disconnected`);
     }
+    if (!sensors.length) degraded.push('No sensors are registered.');
     for (const [k, c] of Object.entries(out.controllers)) if (!c.online) degraded.push(`${snap.controllers[k].name}: heartbeat missing`);
-    if (!out.gsm.reported) degraded.push('SIM800C: no status report');
+    if (out.gsm.missing) degraded.push('SIM800C: not registered with ORION');
+    else if (!out.gsm.reported) degraded.push('SIM800C: no status report');
     else if (!out.gsm.registered) degraded.push('SIM800C: not registered on network — SMS/call alerts unavailable');
 
-    const gatewayDown = !out.controllers.esp32.online; // demo assumption: ESP32 is the gateway
+    // No valid controller link: the gateway is silent, or (if no gateway is flagged) every controller is silent.
+    const gk = R.gatewayKey(snap);
+    out.gateway = gk;
+    const ctrls = Object.values(out.controllers);
+    const gatewayDown = gk ? !out.controllers[gk].online : (ctrls.length === 0 || ctrls.every((c) => !c.online));
     if (gatewayDown) {
       out.system = 'OFFLINE';
-      out.reasons.push('No valid controller connection: ESP32 gateway heartbeat missing for ' + Math.round(out.controllers.esp32.age / 1000) + ' s. All values below are last-known and stale.');
+      const who = gk ? `${snap.controllers[gk].name} gateway heartbeat missing for ${secs(out.controllers[gk].age)}` : 'no controller heartbeat';
+      out.reasons.push(`No valid controller connection: ${who}. All values below are last-known and stale.`);
       if (hazards.length) out.lastKnown = crit ? 'EMERGENCY' : 'ATTENTION';
       out.notes = degraded;
       return out;
@@ -1323,7 +1424,7 @@ ORION.fmt = (function () {
     return out;
   }
 
-  ORION.state = { evaluate, SENSOR_ORDER };
+  ORION.state = { evaluate, sensorOrder: (snap) => R.sensorIds(snap) };
 })();
 
 /* ORION SVG time-series charts: readable axes, units, thresholds, incident markers, gap breaks, hover readout. */
@@ -1588,7 +1689,7 @@ ORION.fmt = (function () {
   }
 
   const chip = (cls, text, ic) => `<span class="chip-s s-${cls}">${ic ? icon(ic) : '<i class="d"></i>'}${esc(text)}</span>`;
-  const demoTag = () => '<span class="tag-demo">demo</span>';
+  const demoTag = () => '<span class="tag-demo" title="Simulated value — not from hardware">simulated</span>';
 
   function statePanel(kind, title, body, extra) {
     const ic = { loading: 'clock', empty: 'info', error: 'x', unconfigured: 'off' }[kind] || 'info';
@@ -1599,7 +1700,8 @@ ORION.fmt = (function () {
     if (!ev || ev.system === 'LOADING') return skeleton(n);
     if (ev.backendError) return statePanel('error', 'Can’t load data', 'The ORION server returned an error. Nothing is shown rather than guessing.', ORION.app.lastOkAt ? `<div class="sp-x">Last good update: ${esc(F.dt(ORION.app.lastOkAt))}</div>` : '');
     if (ev.noData) return statePanel('empty', 'No data yet', 'Nothing has been received from the home yet. Readings appear here once the ESP32 starts sending.');
-    if (ev.unconfigured) return statePanel('unconfigured', 'Live data not connected yet', 'A live backend arrives in Phase 2. Switch to demo to explore ORION.', '<div class="sp-x"><button class="btn sm" data-action="mode" data-mode="demo">Use demo data</button></div>');
+    if (ev.needsAuth) return statePanel('unconfigured', 'Sign in to ORION', 'Live data is only shown to signed-in users.', '<div class="sp-x"><button class="btn sm" data-action="login-open">Sign in</button></div>');
+    if (ev.unconfigured) return statePanel('unconfigured', 'Live data not connected yet', 'No ORION server is configured. Simulation mode lets you explore ORION with invented data.', '<div class="sp-x"><button class="btn sm" data-action="mode" data-mode="demo">Use simulation</button></div>');
     return null;
   }
   function kv(rows) {
@@ -1630,7 +1732,7 @@ ORION.fmt = (function () {
     const res = { facts: [], interp: '', caveats: [], links: [] };
     const now = Date.now();
     const demo = snap.mode === 'demo';
-    if (demo) res.caveats.push('All values are DEMO simulation data, not readings from your hardware.');
+    if (demo) res.caveats.push('All values are SIMULATED test data, not readings from your hardware.');
 
     // safety-first intents
     if (/(there'?s|there is|i see|real)\s+(a )?(fire|smoke)|help|emergency|burning|evacuat/.test(t)) {
@@ -1651,26 +1753,28 @@ ORION.fmt = (function () {
             : 'Data is still loading.';
       return res;
     }
-    const S = snap.sensors;
+    const R = ORION.registry;
+    const sensorOf = (type) => R.sensorOfType(snap, type);
+    const missing = (what) => { res.interp = `No ${what} is registered in ORION, so I have no reading to report.`; return res; };
     const fact = (label, value, id, at) => res.facts.push({ label, value, at, status: id ? freshTag(ev, id) : null });
 
     if (/temp|hot|cold|warm|°/.test(t) && !/humid/.test(t)) {
-      const d = S['dht22-living'];
-      const st = freshTag(ev, 'dht22-living');
+      const d = sensorOf('dht22'); if (!d) return missing('temperature sensor');
+      const st = freshTag(ev, d.id);
       if (d.fields.temperature_c == null) {
-        fact('Temperature (DHT22)', 'no valid reading', 'dht22-living', d.recorded_at);
+        fact('Temperature (DHT22)', 'no valid reading', d.id, d.recorded_at);
         res.interp = 'The DHT22 is not giving a valid temperature right now' + (d.fault ? ` (${d.fault})` : '') + '. I can’t tell you the current temperature.';
       } else {
-        fact('Temperature (DHT22 · ' + (cfg.rooms['dht22-living'] || '') + ')', F.temp(d.fields.temperature_c) + ' ' + F.tempUnit(), 'dht22-living', d.recorded_at);
-        fact('Humidity', d.fields.humidity_percent + ' %RH', 'dht22-living', d.recorded_at);
+        fact('Temperature (DHT22 · ' + R.roomOf(cfg, d) + ')', F.temp(d.fields.temperature_c) + ' ' + F.tempUnit(), d.id, d.recorded_at);
+        fact('Humidity', d.fields.humidity_percent + ' %RH', d.id, d.recorded_at);
         res.interp = st === 'fresh' ? 'This is the latest reading and it is within the freshness window.' : `This value is ${st}: it is the last-known reading, not a current one.`;
         if (cfg.thresholds.temp_advisory_c == null) res.caveats.push('No temperature advisory threshold is configured, so I can’t say whether this is “too high”.');
       }
       return res;
     }
     if (/humid/.test(t)) {
-      const d = S['dht22-living'];
-      fact('Humidity (DHT22)', d.fields.humidity_percent == null ? 'no valid reading' : d.fields.humidity_percent + ' %RH', 'dht22-living', d.recorded_at);
+      const d = sensorOf('dht22'); if (!d) return missing('humidity sensor');
+      fact('Humidity (DHT22)', d.fields.humidity_percent == null ? 'no valid reading' : d.fields.humidity_percent + ' %RH', d.id, d.recorded_at);
       res.interp = d.fields.humidity_percent == null ? 'The DHT22 is not providing a valid humidity reading.' : 'Relative humidity from the DHT22. No advisory threshold is set.';
       return res;
     }
@@ -1687,12 +1791,12 @@ ORION.fmt = (function () {
         { smoke: 'the MQ-2 raw reading crossed the configured threshold.', flame: 'the flame sensor reported a detection.', water: 'the water sensor reported wet.', sensor_stale: 'a sensor stopped reporting.', sensor_fault: 'a sensor reported a fault.', controller: 'a controller heartbeat went missing.', gsm: 'the GSM module lost network registration.' }[inc.type];
       res.caveats.push('Responses listed are what the controller reported doing. They are not proof of physical outcomes (no feedback sensors).');
       if (inc.type === 'smoke') res.caveats.push('MQ-2 values are raw ADC, not ppm, and the module is uncalibrated.');
-      res.links.push({ href: '#incidents', label: 'Open Alerts & incidents' });
+      res.links.push({ href: '#alerts', label: 'Open Alerts & incidents' });
       return res;
     }
     if (/water|leak|wet/.test(t)) {
-      const w = S['water-utility'];
-      fact('Water sensor now', `${w.fields.wet ? 'WET' : 'dry'} · raw ${w.fields.raw_adc}`, 'water-utility', w.recorded_at);
+      const w = sensorOf('water'); if (!w) return missing('water sensor');
+      fact('Water sensor now', `${w.fields.wet ? 'WET' : 'dry'} · raw ${w.fields.raw_adc}`, w.id, w.recorded_at);
       const last = snap.incidents.filter((i) => i.type === 'water').sort((a, b) => b.opened_at - a.opened_at)[0];
       if (last) fact('Latest water event', `${last.state === 'cleared' ? 'cleared' : 'ACTIVE'} · opened ${F.dt(last.opened_at)} · raw ${last.snapshot.value}`, null, last.opened_at);
       res.interp = last ? 'That is the most recent water incident in ORION’s history.' : 'No water incidents are on record.';
@@ -1700,17 +1804,17 @@ ORION.fmt = (function () {
       return res;
     }
     if (/smoke|gas|mq|air/.test(t)) {
-      const m = S['mq2-hall'];
-      fact('MQ-2 (raw ADC)', m.quality === 'warming_up' ? `warming up (${m.warmup_remaining_s} s left)` : String(m.fields.raw_adc), 'mq2-hall', m.recorded_at);
-      fact('Firmware thresholds', `warning ${m.fw_threshold.warning} · critical ${m.fw_threshold.critical} (placeholder)`, null, null);
+      const m = sensorOf('mq2'); if (!m) return missing('smoke/gas sensor');
+      fact('MQ-2 (raw ADC)', m.quality === 'warming_up' ? `warming up (${m.warmup_remaining_s} s left)` : String(m.fields.raw_adc), m.id, m.recorded_at);
+      if (m.fw_threshold) fact('Firmware thresholds', `warning ${m.fw_threshold.warning} · critical ${m.fw_threshold.critical} (placeholder)`, null, null);
       fact('Device-reported state', m.state, null, m.recorded_at);
       res.interp = 'The MQ-2 reports a raw ADC count. It indicates relative change, not a gas concentration.';
       res.caveats.push('Raw ADC is not ppm. MQ-2 is not a certified smoke or gas detector.');
       return res;
     }
     if (/flame|fire/.test(t)) {
-      const f = S['flame-kitchen'];
-      fact('Flame sensor', f.fields.detected ? 'DETECTED' : 'not detected', 'flame-kitchen', f.recorded_at);
+      const f = sensorOf('flame'); if (!f) return missing('flame sensor');
+      fact('Flame sensor', f.fields.detected ? 'DETECTED' : 'not detected', f.id, f.recorded_at);
       res.interp = 'Digital flame module reading. Its polarity has not been verified on the real hardware.';
       return res;
     }
@@ -1719,13 +1823,14 @@ ORION.fmt = (function () {
         const o = ev.controllers[k];
         res.facts.push({ label: c.name, value: (o.online ? 'online' : 'NO HEARTBEAT') + ' · last seen ' + F.ago(c.last_seen_at, now) + ' · fw ' + c.firmware_version, at: c.last_seen_at, status: o.online ? 'fresh' : 'STALE' });
       }
-      res.interp = 'Online means a heartbeat arrived within the configured interval. Board roles are a demo assumption pending confirmation.';
+      res.interp = 'Online means a heartbeat arrived within the configured interval. In ORION the UNO reads the sensors and drives the outputs; the ESP32 is the gateway to the server and the GSM module.';
       return res;
     }
     if (/gsm|sms|call|sim|modem|text/.test(t)) {
       const g = snap.gsm;
+      if (!g) return missing('GSM module');
       res.facts.push({ label: 'SIM800C', value: ev.gsm.reported ? (g.network_registered ? `registered · CSQ ${g.csq}` : 'NOT registered') : 'no status report', at: g.last_report_at, status: ev.gsm.reported ? 'fresh' : 'STALE' });
-      const a = snap.gsmAttempts[0];
+      const a = (snap.gsmAttempts || [])[0];
       if (a) fact('Last attempt', `${a.type.toUpperCase()} · ${a.status} · ${a.note}`, null, a.updated_at);
       res.interp = 'A controller being online does not mean GSM works. SMS and calls are reported separately, and “sent” means the modem accepted it, not that it was delivered.';
       return res;
@@ -1737,7 +1842,7 @@ ORION.fmt = (function () {
       res.caveats.push('ORION is a prototype, not a certified fire alarm or gas detector.');
       return res;
     }
-    res.interp = 'In this Phase 1 mock I can answer about temperature, humidity, smoke (MQ-2), flame, water, controllers, GSM, incidents and overall status.';
+    res.interp = 'In basic mode (no AI connected) I can answer about temperature, humidity, smoke (MQ-2), flame, water, controllers, GSM, incidents and overall status.';
     return res;
   }
 
@@ -1796,14 +1901,57 @@ ORION.fmt = (function () {
         document.addEventListener('keydown', unlock, { once: true, capture: true });
       }
     };
-    if (!window.claude || typeof window.claude.use !== 'function') { fallbackVoice(); cap.ready = true; emit(); return; }
+    cap.host = window.claude && typeof window.claude.use === 'function' ? 'claude' : 'browser';
+    if (cap.host !== 'claude') { cap.dict = browserDictation(); fallbackVoice(); cap.ready = true; emit(); return; }
     const get = (n) => Promise.resolve().then(() => window.claude.use(n)).catch(() => null);
     const [s, t, d] = await Promise.all([get('sample'), get('tts'), get('dictation')]);
-    cap.sample = s; cap.tts = t; cap.dict = d;
+    cap.sample = s; cap.tts = t; cap.dict = d || browserDictation();
     if (t && typeof t.languages === 'function') cap.ttsLangs = await t.languages().catch(() => undefined);
     if (s && typeof s.limits === 'function') { const lim = await s.limits().catch(() => null); cap.tools = !!(lim && lim.tools); }
     fallbackVoice();
     cap.ready = true; emit();
+  }
+
+  /* Browser speech recognition (Web Speech API), exposing the same interface Aura's voice code already uses:
+     start({language}) / stop() / active() / onPartial / onFinal / onState({state, reason}).
+     Chrome and Edge send the audio to their vendor's speech service; availability and languages depend on the browser. */
+  function browserDictation() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return null;
+    let rec = null, on = false, stopping = false;
+    const L = { partial: [], final: [], state: [] };
+    const fire = (k, v) => L[k].forEach((f) => { try { f(v); } catch (e) { console.error(e); } });
+    const ERR = { 'not-allowed': 'not_granted', 'service-not-allowed': 'not_granted', 'language-not-supported': 'unavailable', 'audio-capture': 'unavailable', 'no-speech': 'stopped', aborted: 'stopped', network: 'upstream_error' };
+    return {
+      kind: 'browser',
+      active: () => on,
+      onPartial: (f) => L.partial.push(f), onFinal: (f) => L.final.push(f), onState: (f) => L.state.push(f),
+      start(opts) {
+        return new Promise((resolve, reject) => {
+          if (on) return resolve();
+          let started = false, reason = 'stopped';
+          try {
+            rec = new SR(); rec.continuous = true; rec.interimResults = true;
+            const code = opts && opts.language;
+            rec.lang = (code && BCP[code]) || navigator.language || 'en-IN';
+          } catch (e) { reject({ code: 'unavailable' }); return; }
+          rec.onstart = () => { started = true; on = true; fire('state', { state: 'listening' }); resolve(); };
+          rec.onresult = (e) => {
+            let interim = '';
+            for (let i = e.resultIndex; i < e.results.length; i++) {
+              const r = e.results[i], txt = (r[0] && r[0].transcript) || '';
+              if (r.isFinal) fire('final', { text: txt.trim() + ' ' }); else interim += txt;
+            }
+            fire('partial', { text: interim.trim() });
+          };
+          rec.onerror = (e) => { reason = ERR[e.error] || 'upstream_error'; if (!started) reject({ code: reason }); };
+          rec.onend = () => { on = false; rec = null; fire('state', { state: 'idle', reason: stopping ? 'stopped' : reason }); stopping = false; };
+          fire('state', { state: 'starting' });
+          try { rec.start(); } catch (e) { reject({ code: 'upstream_error' }); }
+        });
+      },
+      stop() { stopping = true; try { if (rec) rec.stop(); } catch (e) { /* already stopped */ } return Promise.resolve(); },
+    };
   }
 
   /* Device (browser) voice — used only where Claude's own voice isn't offered in this view. */
@@ -1883,14 +2031,17 @@ ORION.fmt = (function () {
   function context(app) {
     const snap = app.snap, ev = app.ev, cfg = app.config, now = Date.now();
     if (!snap || snap.status !== 'ok') return { data_status: snap ? snap.status : 'loading', note: ev && ev.reasons ? ev.reasons.join(' ') : 'No data available.' };
-    const S = snap.sensors;
+    const R = ORION.registry;
     const fresh = (id) => {
       const st = ev.sensors[id];
-      return st.status === 'live' ? 'fresh' : st.status === 'stale' ? `STALE — no reading for ${Math.round(st.age / 1000)} s (last-known value)` : st.status;
+      if (!st) return 'unknown';
+      return st.status === 'live' ? 'fresh' : st.status === 'stale' ? (st.age === Infinity ? 'NO READING RECEIVED' : `STALE — no reading for ${Math.round(st.age / 1000)} s (last-known value)`) : st.status;
     };
-    const room = (id) => cfg.rooms[id] || '';
-    const stats = (series, conv) => {
-      const pts = app.source.history(series, now - 86400e3, now).filter((p) => p.v != null);
+    const room = (s) => R.roomOf(cfg, s);
+    const stats = (metric, conv) => {
+      const key = R.seriesForMetric(snap, metric);
+      if (!key) return 'no sensor';
+      const pts = (app.source.history(key, now - 86400e3, now) || []).filter((p) => p.v != null);
       if (!pts.length) return 'no data';
       let mn = Infinity, mx = -Infinity, sum = 0;
       for (const p of pts) { mn = Math.min(mn, p.v); mx = Math.max(mx, p.v); sum += p.v; }
@@ -1898,8 +2049,7 @@ ORION.fmt = (function () {
       return { min: +c(mn).toFixed(1), max: +c(mx).toFixed(1), avg: +c(sum / pts.length).toFixed(1) };
     };
     const tC = cfg.tempUnit === 'F' ? (c) => c * 9 / 5 + 32 : (c) => c;
-    const d = S['dht22-living'];
-    const A = snap.actuators;
+    const A = snap.actuators || null;
     const incs = snap.incidents.slice().sort((a, b) => b.opened_at - a.opened_at);
     const incOut = (i) => ({
       what: ORION.ui.incidentSentence(i), severity: i.severity, state: i.state === 'cleared' ? 'resolved' : 'ACTIVE',
@@ -1909,23 +2059,26 @@ ORION.fmt = (function () {
     });
     return {
       now: F.dt(now), timezone: cfg.timezone, home: cfg.home.name,
-      data_source: app.mode === 'demo' ? 'DEMO SIMULATION — not real hardware readings' : 'live',
+      data_source: app.mode === 'demo' ? 'SIMULATION — invented test data, not real hardware readings' : 'live hardware telemetry',
       overall_state: ev.system, state_reasons: ev.reasons, also: ev.notes,
-      sensors: {
-        smoke_gas_MQ2: { room: room('mq2-hall'), raw_adc: S['mq2-hall'].fields.raw_adc, note: 'raw ADC count, NOT ppm, uncalibrated', device_state: S['mq2-hall'].state, quality: S['mq2-hall'].quality, firmware_thresholds: S['mq2-hall'].fw_threshold, freshness: fresh('mq2-hall'), recorded: F.dt(S['mq2-hall'].recorded_at) },
-        flame: { room: room('flame-kitchen'), detected: S['flame-kitchen'].fields.detected, freshness: fresh('flame-kitchen'), recorded: F.dt(S['flame-kitchen'].recorded_at), note: 'polarity unverified' },
-        water: { room: room('water-utility'), wet: S['water-utility'].fields.wet, raw_adc: S['water-utility'].fields.raw_adc, freshness: fresh('water-utility'), recorded: F.dt(S['water-utility'].recorded_at), note: 'cannot estimate leak volume' },
-        temperature_humidity_DHT22: { room: room('dht22-living'), temperature: d.fields.temperature_c == null ? 'no valid reading' : `${F.temp(d.fields.temperature_c)} ${F.tempUnit()}`, humidity: d.fields.humidity_percent == null ? 'no valid reading' : `${d.fields.humidity_percent} %RH`, quality: d.quality, fault: d.fault || null, freshness: fresh('dht22-living'), recorded: F.dt(d.recorded_at), advisory_thresholds: 'not set' },
-      },
+      sensors: R.sensorList(snap).map((s) => {
+        const f = s.fields || {};
+        const base = { id: s.id, type: s.type, room: room(s), freshness: fresh(s.id), quality: s.quality, recorded: s.recorded_at == null ? 'never' : F.dt(s.recorded_at), simulated: !!s.simulated };
+        if (s.type === 'mq2') return Object.assign(base, { raw_adc: f.raw_adc, note: 'raw ADC count, NOT ppm, uncalibrated', device_state: s.state, firmware_thresholds: s.fw_threshold || 'not reported' });
+        if (s.type === 'flame') return Object.assign(base, { detected: f.detected, note: 'polarity unverified' });
+        if (s.type === 'water') return Object.assign(base, { wet: f.wet, raw_adc: f.raw_adc, note: 'cannot estimate leak volume' });
+        if (s.type === 'dht22') return Object.assign(base, { temperature: f.temperature_c == null ? 'no valid reading' : `${F.temp(f.temperature_c)} ${F.tempUnit()}`, humidity: f.humidity_percent == null ? 'no valid reading' : `${f.humidity_percent} %RH`, fault: s.fault || null, advisory_thresholds: 'not set' });
+        return Object.assign(base, { fields: f });
+      }),
       last_24h: { smoke_raw: stats('mq2'), temperature: stats('temp', tC), humidity_pct: stats('hum'), water_raw: stats('water') },
-      controllers: Object.values(snap.controllers).map((c) => ({ name: c.name, online: ev.controllers[c.id === 'orion-uno-01' ? 'uno' : 'esp32'].online, last_seen: F.ago(c.last_seen_at, now), firmware: c.firmware_version, role: c.role })),
-      gsm_SIM800C: { status_reported: ev.gsm.reported, network_registered: ev.gsm.registered, signal_csq: snap.gsm.csq, recent_attempts: snap.gsmAttempts.slice(0, 4).map((a) => `${a.type.toUpperCase()} ${a.status} at ${F.dt(a.updated_at)} (${a.note})`), note: '"sent" = modem accepted, delivery not confirmed' },
-      outputs_as_commanded_no_feedback: {
+      controllers: Object.entries(snap.controllers || {}).map(([k, c]) => ({ name: c.name, online: ev.controllers[k].online, gateway: !!c.is_gateway, last_seen: c.last_seen_at == null ? 'never' : F.ago(c.last_seen_at, now), firmware: c.firmware_version, role: c.role })),
+      gsm_SIM800C: snap.gsm ? { status_reported: ev.gsm.reported, network_registered: ev.gsm.registered, signal_csq: snap.gsm.csq, recent_attempts: (snap.gsmAttempts || []).slice(0, 4).map((a) => `${a.type.toUpperCase()} ${a.status} at ${F.dt(a.updated_at)} (${a.note})`), note: '"sent" = modem accepted, delivery not confirmed' } : 'not registered with ORION',
+      outputs_as_commanded_no_feedback: A && A.fan ? {
         exhaust_fan: A.fan.commanded + (A.fan.cooldown_remaining_s ? ` (cooldown ${A.fan.cooldown_remaining_s}s left)` : ''),
         buzzer: A.buzzer.commanded, model_door_servo_MG995: `target ${A.mg995.target_angle}° (position not sensed)`,
-        mist_maker: 'disabled — purpose undefined', SG90_servo: 'disabled — purpose undefined',
+        mist_maker: 'not installed (placeholder only)', SG90_servo: 'disabled — purpose undefined',
         leds: A.leds.items.map((l) => `${l.name.split(' — ')[0]} ${l.commanded}`).join(', '),
-      },
+      } : 'no outputs reported',
       active_incidents: incs.filter((i) => i.state !== 'cleared').map(incOut),
       recent_incidents: incs.filter((i) => i.state === 'cleared').slice(0, 5).map(incOut),
       undecided_by_owner: ORION.pending.map((p) => p.title),
@@ -1941,7 +2094,7 @@ ORION.fmt = (function () {
   }
   const CORE = [
     'You are Aura, the calm, friendly assistant inside ORION, a prototype smart-home safety system built by a student on a model house (Arduino UNO + ESP32, MQ-2 smoke/gas, flame, water and DHT22 temperature/humidity sensors, exhaust fan, buzzer, LEDs, servo door, SIM800C GSM for SMS/calls). You work like a careful AI assistant: understand what the person really needs, check the data, then answer clearly.',
-    'TRUTH: For anything about this home, rely only on ORION data (given below or returned by your tools). Never invent or estimate readings, calibration, sensor health, SMS delivery or whether a device physically did something. If a value is STALE, missing or faulty, say so plainly. When the data source is a DEMO SIMULATION, mention that briefly when you report readings.',
+    'TRUTH: For anything about this home, rely only on ORION data (given below or returned by your tools). Never invent or estimate readings, calibration, sensor health, SMS delivery or whether a device physically did something. If a value is STALE, missing or faulty, say so plainly. When the data source is a SIMULATION, say so whenever you report readings — simulated values are not measurements.',
     'FACTS vs OPINION: When you report readings or events, put up to 3 short fact lines first, each starting with "• " and including the value and its time (and "stale" if stale). Then a blank line, then your explanation or advice. For greetings, thanks or general questions, skip the fact lines.',
     'LIMITS: You cannot switch devices, change thresholds, silence alarms or open doors yourself. ORION is a prototype, not a certified fire alarm or gas detector — never claim the home is "safe"; say what the sensors report.',
     'EMERGENCY: If the user says there is a real fire, smoke, gas leak or danger, FIRST tell them to get everyone out and call 112 (emergency) or 101 (fire) in India. Do not tell them to wait for ORION.',
@@ -1952,19 +2105,12 @@ ORION.fmt = (function () {
   function pageContext(app) {
     const u = app.ui, names = { home: 'Home', history: 'History', alerts: 'Alerts', devices: 'Devices', aura: 'Aura chat', config: 'Settings' };
     let s = `The user is currently on the ${names[app.route] || app.route} page`;
-    if (app.route === 'history') s += ` (${u.histSeries}, last ${u.histRange})`;
+    if (app.route === 'history') { const si = ORION.registry.seriesInfo(u.histSeries); s += ` (${si ? si.name : 'no sensor'}, last ${u.histRange})`; }
     return s + '.';
   }
 
-  /* Short summary for tool mode (tools fetch the rest). */
-  function brief(app) {
-    const snap = app.snap, ev = app.ev;
-    if (!snap || snap.status !== 'ok') return { data_status: snap ? snap.status : 'loading', note: ev && ev.reasons ? ev.reasons.join(' ') : '' };
-    const c = context(app);
-    return { now: c.now, data_source: c.data_source, overall_state: c.overall_state, state_reasons: c.state_reasons, active_alerts: c.active_incidents.map((i) => i.what), home: c.home };
-  }
 
-  const SENSOR_SERIES = { smoke: 'mq2', flame: 'flame', water: 'water', temperature: 'temp', humidity: 'hum' };
+  const SENSOR_SERIES = { smoke: 'mq2', flame: 'flame', water: 'water', temperature: 'temp', humidity: 'hum' }; // Aura name → metric
   function tools(app, step) {
     const need = () => { if (!app.snap || app.snap.status !== 'ok') throw new Error('ORION data unavailable: ' + (app.ev && app.ev.reasons ? app.ev.reasons.join(' ') : 'no data')); };
     return [
@@ -1974,21 +2120,22 @@ ORION.fmt = (function () {
         inputSchema: { type: 'object', properties: { sensor: { type: 'string', enum: Object.keys(SENSOR_SERIES) }, hours: { type: 'number', description: '1 to 168' } }, required: ['sensor'] },
         execute(i) {
           need();
-          const key = String(i.sensor || ''), series = SENSOR_SERIES[key]; if (!series) throw new Error('Unknown sensor ' + key);
+          const key = String(i.sensor || ''), metric = SENSOR_SERIES[key]; if (!metric) throw new Error('Unknown sensor ' + key);
+          const series = ORION.registry.seriesForMetric(app.snap, metric); if (!series) return { sensor: key, note: 'no such sensor is registered' };
           const hours = Math.max(1, Math.min(168, Number(i.hours) || 24));
           step('history', `Looked at ${key} history · ${hours >= 24 ? Math.round(hours / 24) + ' day' + (hours >= 48 ? 's' : '') : hours + ' h'}`);
           const to = Date.now(), from = to - hours * 3600e3;
-          let pts = app.source.history(series, from, to).filter((p) => p.v != null);
-          const conv = series === 'temp' && app.config.tempUnit === 'F' ? (v) => v * 9 / 5 + 32 : (v) => v;
+          let pts = (app.source.history(series, from, to) || []).filter((p) => p.v != null);
+          const conv = metric === 'temp' && app.config.tempUnit === 'F' ? (v) => v * 9 / 5 + 32 : (v) => v;
           if (!pts.length) return { sensor: key, hours, note: 'no readings stored in this window' };
           let mn = Infinity, mx = -Infinity, sum = 0, tmx = 0, tmn = 0;
           for (const p of pts) { const v = conv(p.v); if (v > mx) { mx = v; tmx = p.t; } if (v < mn) { mn = v; tmn = p.t; } sum += v; }
           const N = 36, w = (to - from) / N, buckets = [];
           for (let b = 0; b < N; b++) { const a = from + b * w, z = a + w; const ch = pts.filter((p) => p.t >= a && p.t < z); buckets.push({ time: F.dt(a + w / 2), value: ch.length ? +(ch.reduce((s, p) => s + conv(p.v), 0) / ch.length).toFixed(1) : null }); }
           const gaps = buckets.filter((b) => b.value == null).length;
-          const unit = series === 'temp' ? F.tempUnit() : series === 'hum' ? '%RH' : series === 'flame' ? '1 = flame detected' : 'raw ADC (not ppm)';
-          const alerts = app.snap.incidents.filter((x) => x.source_id === ORION.sources.SERIES[series].sensor && x.opened_at >= from).map((x) => ({ what: ORION.ui.incidentSentence(x), severity: x.severity, opened: F.dt(x.opened_at), resolved: x.cleared_at ? F.dt(x.cleared_at) : 'still active' }));
-          return { sensor: key, unit, window: `${F.dt(from)} → ${F.dt(to)}`, data_source: app.mode === 'demo' ? 'DEMO simulation' : 'live', max: { value: +mx.toFixed(1), at: F.dt(tmx) }, min: { value: +mn.toFixed(1), at: F.dt(tmn) }, average: +(sum / pts.length).toFixed(1), points: buckets, buckets_with_no_data: gaps, alerts };
+          const unit = metric === 'temp' ? F.tempUnit() : metric === 'hum' ? '%RH' : metric === 'flame' ? '1 = flame detected' : 'raw ADC (not ppm)';
+          const alerts = app.snap.incidents.filter((x) => x.source_id === ORION.registry.parseSeries(series).sensorId && x.opened_at >= from).map((x) => ({ what: ORION.ui.incidentSentence(x), severity: x.severity, opened: F.dt(x.opened_at), resolved: x.cleared_at ? F.dt(x.cleared_at) : 'still active' }));
+          return { sensor: key, unit, window: `${F.dt(from)} → ${F.dt(to)}`, data_source: app.mode === 'demo' ? 'SIMULATION' : 'live', max: { value: +mx.toFixed(1), at: F.dt(tmx) }, min: { value: +mn.toFixed(1), at: F.dt(tmn) }, average: +(sum / pts.length).toFixed(1), points: buckets, buckets_with_no_data: gaps, alerts };
         } },
       { name: 'get_alerts', description: 'Alert records: what happened, severity, start/end times, sensor reading, what the devices reported doing (with outcomes), and whether the owner marked it as seen. filter "active" or "recent".',
         inputSchema: { type: 'object', properties: { filter: { type: 'string', enum: ['active', 'recent'] }, limit: { type: 'number' } } },
@@ -2002,14 +2149,14 @@ ORION.fmt = (function () {
         execute() {
           need(); step('devices', 'Checked devices, texts and calls');
           const c = context(app), snap = app.snap;
-          return { outputs: c.outputs_as_commanded_no_feedback, recent_commands: snap.commands.slice(0, 5).map((x) => `${x.actuator} ${x.action}: ${x.status} (${x.history[x.history.length - 1].note})`), gsm: c.gsm_SIM800C, boards: c.controllers };
+          return { outputs: c.outputs_as_commanded_no_feedback, recent_commands: (snap.commands || []).slice(0, 5).map((x) => `${x.actuator} ${x.action}: ${x.status} (${x.history[x.history.length - 1].note})`), gsm: c.gsm_SIM800C, boards: c.controllers };
         } },
       { name: 'open_page', description: 'Show the user a page of the ORION app. page: home, history, alerts, devices or settings. For history you may pick sensor and range (1h, 6h, 24h, 7d).',
         inputSchema: { type: 'object', properties: { page: { type: 'string', enum: ['home', 'history', 'alerts', 'devices', 'settings'] }, sensor: { type: 'string', enum: Object.keys(SENSOR_SERIES) }, range: { type: 'string', enum: ['1h', '6h', '24h', '7d'] } }, required: ['page'] },
         execute(i) {
           const page = String(i.page), map = { settings: 'config' };
           if (!['home', 'history', 'alerts', 'devices', 'settings'].includes(page)) throw new Error('Unknown page');
-          if (page === 'history') { if (SENSOR_SERIES[i.sensor]) app.ui.histSeries = SENSOR_SERIES[i.sensor]; if (['1h', '6h', '24h', '7d'].includes(i.range)) app.ui.histRange = i.range; }
+          if (page === 'history') { if (SENSOR_SERIES[i.sensor]) app.ui.histSeries = ORION.registry.seriesForMetric(app.snap, SENSOR_SERIES[i.sensor]) || app.ui.histSeries; if (['1h', '6h', '24h', '7d'].includes(i.range)) app.ui.histRange = i.range; }
           step('open', `Opened ${page}${page === 'history' && i.sensor ? ' · ' + i.sensor : ''}`);
           app.go(map[page] || page);
           return 'The page is now shown to the user.';
@@ -2047,10 +2194,10 @@ ORION.fmt = (function () {
   function split(text) {
     const lines = String(text || '').split('\n');
     const facts = [], rest = [];
-    for (const l of lines) { if (/^\s*[•\-\*]\s+/.test(l) && !rest.join('').trim()) facts.push(l.replace(/^\s*[•\-\*]\s+/, '')); else rest.push(l); }
+    for (const l of lines) { if (/^\s*[•\-*]\s+/.test(l) && !rest.join('').trim()) facts.push(l.replace(/^\s*[•\-*]\s+/, '')); else rest.push(l); }
     return { facts, body: rest.join('\n').trim() };
   }
-  const plainForSpeech = (text) => String(text).replace(/^\s*[•\-\*]\s+/gm, '').replace(/[*_#`]/g, '').replace(/\n{2,}/g, '\n').trim();
+  const plainForSpeech = (text) => String(text).replace(/^\s*[•\-*]\s+/gm, '').replace(/[*_#`]/g, '').replace(/\n{2,}/g, '\n').trim();
 
   const ERR = {
     not_granted: 'Aura needs your permission to use Claude. Basic mode is on for now.',
@@ -2118,7 +2265,7 @@ ORION.fmt = (function () {
   }
   function footNote() {
     const L = lang(), notes = [];
-    if (AI.cap.ready && !aiOn()) notes.push('Open ORION inside Claude and allow Aura to use Claude for full conversation in your language.');
+    if (AI.cap.ready && !aiOn()) notes.push('Aura’s AI isn’t connected here, so it answers in basic English from ORION data. Full conversation needs the ORION server’s Aura service.');
     else if (L.tier === 'other') notes.push(`${L.name} isn’t in Anthropic’s published language benchmark — double-check important answers.`);
     if (AI.cap.ready && !AI.speechAvailable()) notes.push(AI.PLATFORM.android ? 'The Claude Android app can’t play voices from web pages — Aura answers in text here. For voice, open ORION in Chrome.' : 'Voice replies aren’t available in this app — Aura answers in text.');
     if (ui().auraSpeak && AI.speechAvailable() && !AI.canSpeak(L.code)) notes.push(`Spoken replies aren’t available in ${L.name} here — text only.`);
@@ -2552,7 +2699,7 @@ ORION.fmt = (function () {
       <div class="vo-mid" data-action="voice-orb"><button class="vo-orb" data-action="voice-orb" aria-label="Talk to Aura"><span class="vo-ring"></span><span class="vo-core"></span></button>
       <div class="vo-label" aria-live="polite"></div><div class="vo-hint hint"></div><p class="vo-you" dir="auto"></p><p class="vo-aura" dir="auto" aria-live="polite"></p>
       <form class="vo-kb" id="vo-kb" autocomplete="off" data-action="noop"><input id="vo-in" dir="auto" enterkeyhint="send" autocapitalize="sentences" aria-label="Speak or type to Aura"><button class="round send" aria-label="Send">${I('send')}</button></form></div>
-      <div class="vo-foot">${!AI.speechAvailable() ? `<p class="vo-warn">${I('info')}${AI.PLATFORM.android ? 'The Claude Android app can’t play voices from web pages, so Aura will answer in text here. Open in Chrome to hear Aura.' : 'This app can’t play voices from web pages, so Aura will answer in text here.'}</p>` : ''}<div class="vo-alt"><button class="mini" data-action="voice-type">${I('sliders')}Type instead</button>${AI.PLATFORM.android ? `<a class="mini" href="${ARTIFACT_URL}">${I('globe')}Hands-free: open in Chrome</a>` : ''}</div><span class="hint">Aura can’t control devices by itself. In an emergency, call 112.</span></div>`;
+      <div class="vo-foot">${!AI.speechAvailable() ? `<p class="vo-warn">${I('info')}${AI.PLATFORM.android ? 'The Claude Android app can’t play voices from web pages, so Aura will answer in text here. Open in Chrome to hear Aura.' : 'This app can’t play voices from web pages, so Aura will answer in text here.'}</p>` : ''}<div class="vo-alt"><button class="mini" data-action="voice-type">${I('sliders')}Type instead</button>${AI.PLATFORM.android && AI.cap.host === 'claude' ? `<a class="mini" href="${ARTIFACT_URL}">${I('globe')}Hands-free: open in Chrome</a>` : ''}</div><span class="hint">Aura can’t control devices by itself. In an emergency, call 112.</span></div>`;
     document.body.appendChild(o);
     {
       const inp = o.querySelector('#vo-in');
@@ -2585,12 +2732,6 @@ ORION.fmt = (function () {
     const said = i.value.trim(); if (!said) return;
     i.value = ''; i.blur(); // close the keyboard so the answer can be heard and seen
     V.heard = said; V.state = 'thinking'; vRender(); send(said, true);
-  }
-  function kbTip() {
-    const P = AI.PLATFORM;
-    if (P.ios) return 'On iPhone: tap the box, then the mic on the keyboard and speak. Aura sends when you pause. (Turn on Dictation in Settings › General › Keyboard if you don’t see the mic.)';
-    if (P.android) return 'On Android: tap the box, then the mic on your keyboard (Gboard supports മലയാളം, हिन्दी and more). Aura sends when you pause.';
-    return 'Use your keyboard’s or system’s dictation to speak. Aura sends when you pause.';
   }
   function orbTap() {
     V.kb = !AI.cap.dict;
@@ -2654,9 +2795,9 @@ ORION.fmt = (function () {
     return `<div class="sh-head">${I('info', 'sh-ic')}<div><h2 id="md-t">What’s working</h2><span class="hint">Aura checks this each time you open it.</span></div></div>
       <ul class="diag">${row(ai[0], 'Conversation (AI)', ai[1])}${row(voice[0], 'Talking back', voice[1] + (voice[0] ? (ui().auraSpeak ? ' · on' : ' · off — tap “Read replies aloud”') : ''))}
       ${voice[0] ? `<li class="test-li"><button class="btn sm" data-action="voice-test">${I('speaker')}Test voice</button><span class="hint">You should hear Aura say hello.</span></li>` : ''}
-      ${row(!!c.dict, 'Microphone', c.dict ? 'Available — tap the mic and speak' : 'Not available here — type, or use your phone keyboard’s mic')}
+      ${row(!!c.dict, 'Microphone', c.dict ? (c.dict.kind === 'browser' ? 'Browser speech recognition — tap the mic and speak (your browser may send audio to its speech service)' : 'Available — tap the mic and speak') : 'Not available here — type, or use your phone keyboard’s mic')}
       ${row(AI.canSpeak(L.code) || L.code === 'auto', 'Reply language', `${L.name}${voice[0] && !AI.canSpeak(L.code) && L.code !== 'auto' ? ' — no voice for this language here, text only' : ''}`)}</ul>
-      <h3>Problem report</h3><p class="hint">Copy this (or take a screenshot of it) and paste it into your Claude chat.</p>
+      <h3>Problem report</h3><p class="hint">Copy this (or take a screenshot of it) when reporting a problem.</p>
       <pre class="report" id="au-report">${esc(report())}</pre>
       <div class="row-btns" style="margin:8px 0 0"><button class="btn sm" data-action="aura-copyreport">${I('check')}Copy report</button></div>
       <h3>Talking to Aura on ${esc(AI.PLATFORM.name)}</h3><ul class="tips">${platformTips()}</ul>
@@ -2758,47 +2899,51 @@ ORION.fmt = (function () {
   const U = ORION.util, F = ORION.fmt, esc = U.esc, C = ORION.ui, I = C.icon;
   const A = () => ORION.app;
   const set = (el, sel, html) => { const n = el.querySelector(sel); if (n && n._h !== html) { n.innerHTML = html; n._h = html; } };
-  const COLORS = { mq2: '#f0a35e', temp: '#ff8a7a', hum: '#6cc6e8', water: '#7aa8ff', flame: '#ff6b6b' };
+  const R = ORION.registry;
+  const isSim = () => A().mode === 'demo';
 
-  const TILES = [
-    { k: 'mq2', id: 'mq2-hall', icon: 'smoke', name: 'Smoke & gas', series: 'mq2' },
-    { k: 'flame', id: 'flame-kitchen', icon: 'flame', name: 'Flame', series: 'flame' },
-    { k: 'water', id: 'water-utility', icon: 'water', name: 'Water leak', series: 'water' },
-    { k: 'temp', id: 'dht22-living', icon: 'temp', name: 'Temperature', series: 'temp' },
-    { k: 'hum', id: 'dht22-living', icon: 'hum', name: 'Humidity', series: 'hum' },
-  ];
-  const tileOf = (k) => TILES.find((t) => t.k === k);
+  /* One tile per measured quantity of each registered sensor (DHT22 → temperature + humidity). */
+  const tilesOf = (snap) => R.seriesList(snap).map((s) => ({ k: s.key, id: s.sensorId, metric: s.metric, icon: s.icon, name: s.name, series: s.key, color: s.color }));
+  const tileOf = (k) => { const s = R.seriesInfo(k); return s ? { k, id: s.sensorId, metric: s.metric, icon: s.icon, name: s.name, series: s.key, color: s.color } : null; };
+  /* The chart series the History page shows: the user's choice if it still exists, else the first one. */
+  function curSeries(snap) {
+    const list = R.seriesList(snap), want = A().ui.histSeries;
+    const hit = list.find((x) => x.key === want);
+    if (hit) return hit.key;
+    const byMetric = want && list.find((x) => x.metric === R.parseSeries(want).metric);
+    return byMetric ? byMetric.key : list.length ? list[0].key : null;
+  }
 
   /* ---------- sensor reading → plain words ---------- */
   function reading(k, snap, ev) {
-    const t = tileOf(k), s = snap.sensors[t.id], st = ev.sensors[t.id], f = s.fields;
+    const t = tileOf(k), s = snap.sensors[t.id], st = ev.sensors[t.id], f = s.fields, m = t.metric;
     let big = '—', small = '', level = 'ok', unit = '';
-    if (k === 'mq2') {
+    if (m === 'mq2') {
       if (s.quality === 'warming_up' && st.status !== 'stale') { big = 'Warming up'; small = `${s.warmup_remaining_s} s left`; level = 'muted'; }
       else { big = { normal: 'Clear', warning: 'Smoke', critical: 'Danger' }[s.state] || '—'; small = `Level ${f.raw_adc} (raw)`; level = { normal: 'ok', warning: 'warn', critical: 'crit' }[s.state] || 'muted'; }
-    } else if (k === 'flame') { big = f.detected ? 'Flame!' : 'None'; level = f.detected ? 'crit' : 'ok'; small = f.detected ? 'Fire sensor triggered' : 'No flame seen'; }
-    else if (k === 'water') { big = f.wet ? 'Wet' : 'Dry'; level = f.wet ? 'warn' : 'ok'; small = `Level ${f.raw_adc} (raw)`; }
-    else if (k === 'temp') { if (f.temperature_c == null) { big = 'No reading'; level = 'muted'; } else { big = F.temp(f.temperature_c); unit = F.tempUnit(); small = 'Room temperature'; } }
-    else if (k === 'hum') { if (f.humidity_percent == null) { big = 'No reading'; level = 'muted'; } else { big = f.humidity_percent.toFixed(0); unit = '%'; small = 'Relative humidity'; } }
+    } else if (m === 'flame') { big = f.detected ? 'Flame!' : 'None'; level = f.detected ? 'crit' : 'ok'; small = f.detected ? 'Fire sensor triggered' : 'No flame seen'; }
+    else if (m === 'water') { big = f.wet ? 'Wet' : 'Dry'; level = f.wet ? 'warn' : 'ok'; small = `Level ${f.raw_adc} (raw)`; }
+    else if (m === 'temp') { if (f.temperature_c == null) { big = 'No reading'; level = 'muted'; } else { big = F.temp(f.temperature_c); unit = F.tempUnit(); small = 'Room temperature'; } }
+    else if (m === 'hum') { if (f.humidity_percent == null) { big = 'No reading'; level = 'muted'; } else { big = f.humidity_percent.toFixed(0); unit = '%'; small = 'Relative humidity'; } }
     if (st.status === 'fault') { big = 'No reading'; level = 'muted'; small = 'Sensor fault'; }
     let foot;
-    if (st.status === 'stale') foot = `Not updating · last reading ${F.ago(s.received_at)}`;
+    if (st.status === 'stale') foot = s.received_at == null ? 'No reading received yet' : `Not updating · last reading ${F.ago(s.received_at)}`;
     else if (st.status === 'fault') foot = 'Sensor reported a fault';
     else if (st.status === 'warming_up') foot = 'Getting ready';
     else foot = `Updated ${F.ago(s.received_at)}`;
-    return { big, small, level, unit, foot, stale: st.status === 'stale', status: st.status, room: A().config.rooms[t.id] || '' };
+    return { big, small, level, unit, foot, stale: st.status === 'stale', status: st.status, room: R.roomOf(A().config, s) };
   }
 
   function tile(t, snap, ev) {
     const r = reading(t.k, snap, ev);
     const now = Date.now();
-    const sp = ORION.charts.spark(A().source.history(t.series, now - 30 * 60e3, now), COLORS[t.series], now - 30 * 60e3, now);
+    const sp = ORION.charts.spark(A().source.history(t.series, now - 30 * 60e3, now), t.color, now - 30 * 60e3, now);
     return `<button class="tile lv-${r.level}${r.stale ? ' is-stale' : ''}" data-action="sensor" data-k="${t.k}" aria-label="${esc(t.name)}: ${esc(r.big)} ${esc(r.unit)}. ${esc(r.foot)}. Open details.">
       <div class="t-top">${I(t.icon, 't-ic')}<div class="t-name">${esc(t.name)}<span>${esc(r.room)}</span></div></div>
       <div class="t-val">${r.stale ? '<span class="t-lk">Last known</span>' : ''}<b>${esc(r.big)}</b>${r.unit ? `<i>${esc(r.unit)}</i>` : ''}</div>
       <div class="t-small">${esc(r.small)}</div>
       <div class="t-spark">${sp}</div>
-      <div class="t-foot">${r.stale ? I('clock') : r.status === 'live' ? '<i class="pulse-dot"></i>' : I('info')}<span>${esc(r.foot)}</span>${A().mode === 'demo' ? C.demoTag() : ''}</div>
+      <div class="t-foot">${r.stale ? I('clock') : r.status === 'live' ? '<i class="pulse-dot"></i>' : I('info')}<span>${esc(r.foot)}</span>${isSim() ? C.demoTag() : ''}</div>
     </button>`;
   }
 
@@ -2835,6 +2980,7 @@ ORION.fmt = (function () {
 
   function devicesCompact(snap) {
     const a = snap.actuators;
+    if (!a || !a.fan) return '<p class="hint">No outputs have reported yet.</p>';
     const onoff = (v) => v === 'on' ? C.chip('ok', 'On') : C.chip('off', 'Off');
     const led = (id) => a.leds.items.find((l) => l.id === id).commanded;
     const rows = [
@@ -2843,17 +2989,16 @@ ORION.fmt = (function () {
       ['door', 'Model door', a.mg995.target_angle > 0 ? C.chip('warn', 'Set to open') : C.chip('off', 'Set to closed')],
       ['bulb', 'Status light', led('led-red') === 'on' ? C.chip('crit', 'Red') : C.chip('ok', 'Green')],
       ['bulb', 'Room lights', led('led-white') === 'on' ? C.chip('ok', 'On') : C.chip('off', 'Off')],
-      ['mist', 'Mist maker', C.chip('off', 'Not set up')],
+      ['mist', 'Mist maker', C.chip('off', 'Not installed')],
     ];
     return `<ul class="rows">${rows.map(([ic, n, v]) => `<li>${I(ic)}<span>${esc(n)}</span><span class="r-v">${v}</span></li>`).join('')}</ul><p class="hint">Shows what the controller told each device to do. Nothing reports back whether it physically happened.</p>`;
   }
   function connCompact(snap, ev) {
-    const c = snap.controllers;
     const row = (ic, n, ok, okText, badText, sub) => `<li>${I(ic)}<span>${esc(n)}<small>${esc(sub)}</small></span><span class="r-v">${ok ? C.chip('ok', okText) : C.chip('crit', badText)}</span></li>`;
-    const g = snap.gsm;
+    const g = snap.gsm || {};
+    const ctrls = Object.entries(snap.controllers || {}).sort(([, a], [, b]) => (b.is_gateway ? 1 : 0) - (a.is_gateway ? 1 : 0));
     return `<ul class="rows">
-      ${row('chip', 'ESP32', ev.controllers.esp32.online, 'Online', 'No signal', 'Last seen ' + F.ago(c.esp32.last_seen_at))}
-      ${row('chip', 'Arduino UNO', ev.controllers.uno.online, 'Online', 'No signal', 'Last seen ' + F.ago(c.uno.last_seen_at))}
+      ${ctrls.map(([k, c]) => row('chip', c.name, ev.controllers[k].online, 'Online', 'No signal', (c.last_seen_at == null ? 'Never seen' : 'Last seen ' + F.ago(c.last_seen_at)) + (c.is_gateway ? ' · gateway' : ''))).join('')}
       ${!ev.gsm.reported ? `<li>${I('signal')}<span>GSM (SIM800C)<small>No status received</small></span><span class="r-v">${C.chip('off', 'Unknown')}</span></li>` : row('signal', 'GSM (SIM800C)', g.network_registered, 'Can text & call', 'No network', g.network_registered ? `Signal ${g.csq}/31` : 'SMS and calls unavailable')}
     </ul>`;
   }
@@ -2877,7 +3022,8 @@ ORION.fmt = (function () {
       set(el, '#h-status', statusCard(ev, snap));
       const act = snap.incidents.filter((i) => i.state !== 'cleared').sort((a, b) => rank(b) - rank(a) || b.opened_at - a.opened_at);
       set(el, '#h-alerts', act.map(alertCard).join(''));
-      set(el, '#h-tiles', TILES.map((t) => tile(t, snap, ev)).join(''));
+      const tiles = tilesOf(snap);
+      set(el, '#h-tiles', tiles.length ? tiles.map((t) => tile(t, snap, ev)).join('') : C.statePanel('empty', 'No sensors registered', 'Register a controller and its sensors to see readings here.'));
       set(el, '#h-dev', devicesCompact(snap));
       set(el, '#h-conn', connCompact(snap, ev));
     },
@@ -2885,7 +3031,7 @@ ORION.fmt = (function () {
   const rank = (i) => ({ critical: 4, warning: 3, degraded: 2, info: 1 }[i.severity] || 0);
 
   /* ---------- sensor detail sheet ---------- */
-  const PENDING_FOR = { mq2: ['mq2', 'mq2_level', 'door'], flame: ['flame', 'flame_buzzer', 'flame_lights'], water: ['water', 'water_notify'], temp: ['dht'], hum: ['dht'] };
+  const PENDING_FOR = { mq2: ['mq2', 'mq2_level', 'door'], flame: ['flame', 'flame_buzzer', 'flame_lights'], water: ['water', 'water_notify'], temp: ['dht'], hum: ['dht'] }; // keyed by metric
   const EXPLAIN = {
     mq2: 'The MQ-2 senses smoke and flammable gas. ORION shows its raw level, not a gas concentration (ppm), because the sensor isn’t calibrated.',
     flame: 'The flame sensor sees the light of a nearby flame. It only says yes or no.',
@@ -2896,25 +3042,31 @@ ORION.fmt = (function () {
   function sensorSheet(k) {
     const { snap, ev, config } = A();
     if (!snap || snap.status !== 'ok') return C.guard(ev, 1) || '';
-    const t = tileOf(k), s = snap.sensors[t.id], r = reading(k, snap, ev), f = s.fields;
-    const now = Date.now();
+    const t = tileOf(k);
+    if (!t || !snap.sensors[t.id]) return C.statePanel('empty', 'Sensor not found', 'This sensor is no longer registered.');
+    const s = snap.sensors[t.id], r = reading(k, snap, ev), f = s.fields;
+    const now = Date.now(), m = t.metric;
+    const ctrl = s.controller && snap.controllers ? snap.controllers[s.controller] : null;
+    const gk = R.gatewayKey(snap);
+    const via = ctrl ? ctrl.name + (gk && gk !== s.controller ? ` → ${snap.controllers[gk].name} gateway` : '') : 'not reported';
     const rows = [
-      k === 'mq2' ? ['Raw level', String(f.raw_adc)] : null,
-      k === 'mq2' ? ['Firmware levels', `warning ${s.fw_threshold.warning} · danger ${s.fw_threshold.critical}`] : null,
-      k === 'mq2' && (config.thresholds.mq2_warning !== s.fw_threshold.warning || config.thresholds.mq2_critical !== s.fw_threshold.critical) ? ['App levels', `warning ${config.thresholds.mq2_warning} · danger ${config.thresholds.mq2_critical} — differ from the device; the device’s values are what trigger the alarm`] : null,
-      k === 'water' ? ['Raw level', `${f.raw_adc} (wet at ${s.fw_threshold ? s.fw_threshold.wet : '—'})`] : null,
-      k === 'flame' ? ['Digital output', `${f.digital_value} · ${s.polarity}`] : null,
+      m === 'mq2' ? ['Raw level', String(f.raw_adc)] : null,
+      m === 'mq2' && s.fw_threshold ? ['Firmware levels', `warning ${s.fw_threshold.warning} · danger ${s.fw_threshold.critical}`] : null,
+      m === 'mq2' && s.fw_threshold && (config.thresholds.mq2_warning !== s.fw_threshold.warning || config.thresholds.mq2_critical !== s.fw_threshold.critical) ? ['App levels', `warning ${config.thresholds.mq2_warning} · danger ${config.thresholds.mq2_critical} — differ from the device; the device’s values are what trigger the alarm`] : null,
+      m === 'water' ? ['Raw level', `${f.raw_adc} (wet at ${s.fw_threshold ? s.fw_threshold.wet : '—'})`] : null,
+      m === 'flame' ? ['Digital output', `${f.digital_value} · ${s.polarity}`] : null,
       ['Device says', s.state],
       ['Data quality', s.quality + (s.fault ? ` — ${s.fault}` : '')],
       ['Measured at', F.dt(s.recorded_at)],
-      ['Received', `${F.ago(s.received_at)} (${((s.received_at - s.recorded_at) / 1000).toFixed(1)} s delay)`],
-      ['Sensor ID', `${s.id} · seq ${s.sequence}`],
-      ['Connected to', 'ESP32 in this demo (real wiring not confirmed)'],
+      ['Received', s.received_at == null ? 'never' : `${F.ago(s.received_at)} (${((s.received_at - s.recorded_at) / 1000).toFixed(1)} s delay)`],
+      ['Sensor ID', `${s.id} · seq ${s.sequence == null ? '—' : s.sequence}`],
+      ['Connected to', via + (s.simulated ? ' (simulated)' : '')],
+      ['Data source', s.simulated ? 'SIMULATION — not a hardware reading' : 'Hardware telemetry'],
     ];
-    const pend = ORION.pending.filter((p) => PENDING_FOR[k].includes(p.key));
-    return `<div class="sh-head">${I(t.icon, 'sh-ic lv-' + r.level)}<div><h2 id="md-t">${esc(t.name)}</h2><span class="hint">${esc(r.room)}${A().mode === 'demo' ? ' · demo data' : ''}</span></div></div>
+    const pend = ORION.pending.filter((p) => (PENDING_FOR[m] || []).includes(p.key));
+    return `<div class="sh-head">${I(t.icon, 'sh-ic lv-' + r.level)}<div><h2 id="md-t">${esc(t.name)}</h2><span class="hint">${esc(r.room)}${s.simulated ? ' · simulated data' : ''}</span></div></div>
       <div class="sh-val lv-${r.level}${r.stale ? ' is-stale' : ''}">${r.stale ? '<span class="t-lk">Last known</span>' : ''}<b>${esc(r.big)}</b>${r.unit ? `<i>${esc(r.unit)}</i>` : ''}<span>${esc(r.foot)}</span></div>
-      <p class="sh-ex">${esc(EXPLAIN[k])}</p>
+      <p class="sh-ex">${esc(EXPLAIN[m] || '')}</p>
       <div class="sh-chart">${chartFor(t.series, now - 3600e3, now, 170, 520)}</div>
       <details class="more" open><summary>Technical details</summary>${C.kv(rows)}</details>
       ${pend.length ? `<details class="more"><summary>Not decided yet (${pend.length})</summary><ul class="pend">${pend.map((p) => `<li><b>${esc(p.title)}</b><span>${esc(p.detail)}</span></li>`).join('')}</ul></details>` : ''}`;
@@ -2925,13 +3077,18 @@ ORION.fmt = (function () {
   const RLABEL = { '1h': 'Hour', '6h': '6 hours', '24h': 'Day', '7d': 'Week' };
   const viewW = () => { const v = document.getElementById('view'); return v ? v.clientWidth : 1000; };
   function markersFor(series, from, to) {
-    const sid = ORION.sources.SERIES[series].sensor;
-    return A().snap.incidents
-      .filter((i) => (i.source_id === sid || (i.type === 'controller' && i.source_id === 'orion-esp32-01')) && i.opened_at <= to && (i.cleared_at || Date.now()) >= from)
+    const snap = A().snap, sid = R.parseSeries(series).sensorId, sensor = snap.sensors[sid];
+    // A sensor's data also stops when its own controller or the gateway goes silent.
+    const ctrlIds = new Set();
+    const gk = R.gatewayKey(snap);
+    if (gk) ctrlIds.add(snap.controllers[gk].id);
+    if (sensor && sensor.controller && snap.controllers[sensor.controller]) ctrlIds.add(snap.controllers[sensor.controller].id);
+    return snap.incidents
+      .filter((i) => (i.source_id === sid || (i.type === 'controller' && ctrlIds.has(i.source_id))) && i.opened_at <= to && (i.cleared_at || Date.now()) >= from)
       .map((i) => ({ t0: i.opened_at, t1: i.cleared_at || Date.now(), sev: (C.SEV[i.severity] || C.SEV.info).cls, label: `${C.incidentSentence(i)} · ${F.dt(i.opened_at)}`, short: i.severity === 'degraded' ? 'NO DATA' : (C.SEV[i.severity] || C.SEV.info).word.toUpperCase() }));
   }
-  function thresholdsFor(series) {
-    const t = A().config.thresholds;
+  function thresholdsFor(key) {
+    const t = A().config.thresholds, series = R.parseSeries(key).metric;
     if (series === 'mq2') return [{ v: t.mq2_warning, label: 'warning ' + t.mq2_warning, sev: 'warn' }, { v: t.mq2_critical, label: 'danger ' + t.mq2_critical, sev: 'crit' }];
     if (series === 'water') return [{ v: t.water_wet, label: 'wet ' + t.water_wet, sev: 'warn' }];
     if (series === 'temp' && t.temp_advisory_c != null) return [{ v: t.temp_advisory_c, label: 'advisory', sev: 'warn' }];
@@ -2939,25 +3096,26 @@ ORION.fmt = (function () {
     return [];
   }
   function seriesPoints(series, from, to) {
-    let pts = A().source.history(series, from, to);
-    if (series === 'temp' && A().config.tempUnit === 'F') pts = pts.map((p) => Object.assign({}, p, { v: p.v == null ? null : +(p.v * 9 / 5 + 32).toFixed(1) }));
+    let pts = A().source.history(series, from, to) || [];
+    if (R.parseSeries(series).metric === 'temp' && A().config.tempUnit === 'F') pts = pts.map((p) => Object.assign({}, p, { v: p.v == null ? null : +(p.v * 9 / 5 + 32).toFixed(1) }));
     return pts;
   }
   function chartFor(series, from, to, height, width) {
-    const S = ORION.sources.SERIES[series];
+    const S = R.seriesInfo(series), m = S.metric;
     return ORION.charts.render({
-      points: seriesPoints(series, from, to), from, to, unit: series === 'temp' ? F.tempUnit() : series === 'mq2' || series === 'water' ? 'raw' : S.unit, dp: S.dp, color: COLORS[series], title: S.label,
-      thresholds: thresholdsFor(series), markers: markersFor(series, from, to), height, width, step: series === 'flame', binary: series === 'flame',
-      yMin: series === 'flame' ? -0.1 : null, yMax: series === 'flame' ? 1.1 : null,
+      points: seriesPoints(series, from, to), from, to, unit: m === 'temp' ? F.tempUnit() : m === 'mq2' || m === 'water' ? 'raw' : S.unit, dp: S.dp, color: S.color, title: S.label,
+      thresholds: thresholdsFor(series), markers: markersFor(series, from, to), height, width, step: m === 'flame', binary: m === 'flame',
+      yMin: m === 'flame' ? -0.1 : null, yMax: m === 'flame' ? 1.1 : null,
     });
   }
+  const pillsHTML = (snap, cur) => R.seriesList(snap).map((t) => `<button class="pill${cur === t.key ? ' on' : ''}" data-action="hseries" data-s="${esc(t.key)}" aria-pressed="${cur === t.key}">${I(t.icon)}${esc(t.name)}${R.sensorList(snap).filter((x) => x.type === t.type).length > 1 ? ' · ' + esc(R.roomOf(A().config, snap.sensors[t.sensorId]) || t.sensorId) : ''}</button>`).join('');
   const history = {
     title: 'History',
     mount(el) {
       const ui = A().ui;
       el.innerHTML = `<div class="page-h"><h1>History</h1><p>How each sensor changed over time. Coloured bands are alerts; striped bands mean no data arrived.</p></div>
         <div class="bar">
-          <div class="pills" role="group" aria-label="Sensor">${TILES.map((t) => `<button class="pill${ui.histSeries === t.series ? ' on' : ''}" data-action="hseries" data-s="${t.series}" aria-pressed="${ui.histSeries === t.series}">${I(t.icon)}${esc(t.name)}</button>`).join('')}</div>
+          <div class="pills" id="hi-pills" role="group" aria-label="Sensor"></div>
           <div class="seg" role="group" aria-label="Time range">${Object.keys(RANGES).map((r) => `<button class="seg-b${ui.histRange === r ? ' on' : ''}" data-action="range" data-r="${r}" aria-pressed="${ui.histRange === r}">${RLABEL[r]}</button>`).join('')}</div>
         </div>
         <section class="card"><div id="hi-sum" class="sum"></div><div id="hi-chart"></div><div class="card-foot"><span id="hi-range" class="hint"></span><button class="btn sm ghost" data-action="csv-dl">${I('chart')}Export CSV</button></div></section>
@@ -2966,29 +3124,36 @@ ORION.fmt = (function () {
     update(el, force) {
       const { ev, snap, ui } = A();
       const g = C.guard(ev, 1);
-      if (g) return set(el, '#hi-chart', g);
+      if (g) { set(el, '#hi-pills', ''); return set(el, '#hi-chart', g); }
+      const key = curSeries(snap);
+      set(el, '#hi-pills', pillsHTML(snap, key));
+      if (!key) { set(el, '#hi-sum', ''); return set(el, '#hi-chart', C.statePanel('empty', 'No sensors registered', 'There is no history to show yet.')); }
+      ui.histSeries = key;
       if (!force && ui.tick % 5 !== 1 && el.querySelector('#hi-chart').innerHTML) return;
       if (!force && el.querySelector('.chart-wrap:hover')) return;
-      const to = Date.now(), from = to - RANGES[ui.histRange], s = ui.histSeries;
+      const to = Date.now(), from = to - RANGES[ui.histRange], s = key, m = R.parseSeries(key).metric, sid = R.parseSeries(key).sensorId;
       const pts = seriesPoints(s, from, to).filter((p) => p.v != null);
-      const n = snap.incidents.filter((i) => i.source_id === ORION.sources.SERIES[s].sensor && i.opened_at >= from && i.severity !== 'degraded').length;
-      const unit = s === 'temp' ? F.tempUnit() : s === 'hum' ? '%' : '';
+      const n = snap.incidents.filter((i) => i.source_id === sid && i.opened_at >= from && i.severity !== 'degraded').length;
+      const unit = m === 'temp' ? F.tempUnit() : m === 'hum' ? '%' : '';
       let sum;
-      if (s === 'flame') sum = `<div><b>${pts.some((p) => p.v) ? 'Yes' : 'No'}</b><span>flame seen</span></div>`;
+      if (m === 'flame') sum = `<div><b>${pts.some((p) => p.v) ? 'Yes' : 'No'}</b><span>flame seen</span></div>`;
       else if (pts.length) {
         let mn = Infinity, mx = -Infinity, tot = 0; for (const p of pts) { mn = Math.min(mn, p.v); mx = Math.max(mx, p.v); tot += p.v; }
-        const dp = s === 'temp' ? 1 : 0;
+        const dp = m === 'temp' ? 1 : 0;
         sum = `<div><b>${mx.toFixed(dp)}${unit}</b><span>highest</span></div><div><b>${mn.toFixed(dp)}${unit}</b><span>lowest</span></div><div><b>${(tot / pts.length).toFixed(dp)}${unit}</b><span>average</span></div>`;
       } else sum = '';
       set(el, '#hi-sum', sum + `<div><b>${n}</b><span>${n === 1 ? 'alert' : 'alerts'}</span></div>`);
-      set(el, '#hi-range', `${esc(F.dt(from))} → ${esc(F.dt(to))}${A().mode === 'demo' ? ' · demo data' : ''}${s === 'mq2' || s === 'water' ? ' · raw sensor level, not calibrated' : ''}`);
+      set(el, '#hi-range', `${esc(F.dt(from))} → ${esc(F.dt(to))}${isSim() ? ' · simulated data' : ''}${m === 'mq2' || m === 'water' ? ' · raw sensor level, not calibrated' : ''}`);
       set(el, '#hi-chart', chartFor(s, from, to, 300, viewW() - 50));
     },
   };
   function buildCSV(series, from, to) {
     const rows = ['series,sensor_id,recorded_at_utc,received_at_utc,value,unit,quality,source'];
-    const S = ORION.sources.SERIES[series];
-    for (const p of A().source.history(series, from, to)) rows.push([series, S.sensor, U.iso(p.t), U.iso(p.r), p.v == null ? '' : p.v, series === 'temp' ? 'celsius' : S.unit, p.q, A().mode].join(','));
+    const S = R.seriesInfo(series);
+    if (!S) return rows[0];
+    const source = isSim() ? 'simulation' : 'hardware';
+    const q = (v) => (/[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v));
+    for (const p of A().source.history(series, from, to) || []) rows.push([S.metric, S.sensorId, U.iso(p.t), U.iso(p.r), p.v == null ? '' : p.v, S.metric === 'temp' ? 'celsius' : S.unit, p.q, p.sim === false ? 'hardware' : source].map(q).join(','));
     return rows.join('\n');
   }
 
@@ -3050,34 +3215,35 @@ ORION.fmt = (function () {
     },
   };
   function outputs(snap, ev) {
-    const a = snap.actuators, demo = A().mode === 'demo', live = ev.controllers.esp32.online;
-    const busy = snap.commands.find((c) => ['requested', 'queued', 'sent', 'accepted'].includes(c.status));
+    if (!snap.actuators || !snap.actuators.fan) return '<p class="hint">No outputs have reported yet.</p>';
+    const a = snap.actuators, demo = isSim(), gk = R.gatewayKey(snap), live = gk ? ev.controllers[gk].online : false;
+    const busy = (snap.commands || []).find((c) => ['requested', 'queued', 'sent', 'accepted'].includes(c.status));
     const dis = !live || busy ? 'disabled' : '';
     const btn = (act, label) => `<button class="btn sm ghost" data-action="cmd" data-act="${act}" ${dis}>${esc(label)}</button>`;
     const onoff = (v) => v === 'on' ? C.chip('ok', 'On') : C.chip('off', 'Off');
     const row = (ic, name, state, note, ctrl) => `<div class="drow">${I(ic, 'd-ic')}<div class="d-txt"><b>${esc(name)}</b><span>${note}</span></div><div class="d-state">${state}</div>${ctrl ? `<div class="d-ctrl">${ctrl}</div>` : ''}</div>`;
     const ledTxt = a.leds.items.map((l) => `${l.name.split(' — ')[0]} ${l.commanded}`).join(' · ');
-    const simNote = demo ? (busy ? '<span class="tag-demo">waiting for last command</span>' : !live ? '<span class="tag-demo">gateway offline</span>' : '<span class="tag-demo">simulated</span>') : '';
+    const simNote = busy ? '<span class="tag-demo">waiting for last command</span>' : !live ? '<span class="tag-demo">gateway offline</span>' : demo ? '<span class="tag-demo">simulated</span>' : '';
     return [
       row('fan', 'Exhaust fan', onoff(a.fan.commanded), a.fan.cooldown_remaining_s ? `Keeps running ${a.fan.cooldown_remaining_s} s after smoke clears` : `Last changed ${esc(F.ago(a.fan.last_changed_at))} by ${esc(a.fan.by)}`, demo ? `${btn('fan:on', 'Turn on')}${btn('fan:off', 'Turn off')}${simNote}` : ''),
       row('bell', 'Buzzer', a.buzzer.commanded === 'on' ? C.chip('crit', 'Sounding') : C.chip('off', 'Quiet'), 'Sounds automatically on smoke — doesn’t need this app', demo ? `${btn('buzzer:test', 'Test 2 s')}${simNote}` : ''),
       row('door', 'Model door (MG995 servo)', a.mg995.target_angle > 0 ? C.chip('warn', `Set to open ${a.mg995.target_angle}°`) : C.chip('off', 'Set to closed'), 'Opens 180° for 5 s on smoke. No manual control — needs a safety review before any real door.', ''),
       row('bulb', 'Lights & LEDs', '', esc(ledTxt), ''),
-      row('relay', 'Relay module', C.chip('off', a.relay.channels[0].commanded === 'energised' ? 'Channel 1 on' : 'Channel 1 off'), 'Channel 1 → fan (demo). Wiring and on-level not confirmed yet.', ''),
-      row('mist', 'Mist maker', C.chip('off', 'Not set up'), 'Disabled until you decide what it’s for and add safety interlocks. Never switches on by itself.', ''),
+      row('relay', 'Relay module', C.chip('off', a.relay.channels[0].commanded === 'energised' ? 'Channel 1 on' : 'Channel 1 off'), 'Channel 1 → fan (planned). Wiring and on-level not confirmed yet.', ''),
+      row('mist', 'Mist maker', C.chip('off', 'Not installed'), 'Not part of the current hardware. Kept as a disabled placeholder — never switches on by itself.', ''),
       row('servo', 'Second servo (SG90)', C.chip('off', 'Not set up'), 'Disabled until its job is decided.', ''),
     ].join('');
   }
   function gsmList(snap) {
     const W = { sent: ['ok', 'Sent'], failed: ['crit', 'Failed'], timeout: ['warn', 'No answer'], queued: ['info', 'Waiting'], sending: ['info', 'Sending…'], unknown: ['degr', 'Unknown'], not_configured: ['off', 'Not set up'] };
-    const list = snap.gsmAttempts.slice(0, 6);
+    const list = (snap.gsmAttempts || []).slice(0, 6);
     if (!list.length) return '<p class="hint">No texts or calls yet.</p>';
     return `<ul class="rows">${list.map((a) => { const w = W[a.status] || ['info', a.status]; return `<li>${I(a.type === 'sms' ? 'send' : 'signal')}<span>${a.type === 'sms' ? 'Text message' : 'Phone call'} to ${esc(a.destination.split(' · ')[0])}<small>${esc(F.day(a.created_at))}, ${esc(F.time(a.created_at))} · ${esc(a.note)}</small></span><span class="r-v">${C.chip(w[0], w[1])}</span></li>`; }).join('')}</ul>
       <p class="hint">“Sent” means the GSM module accepted the text. ORION never claims it was delivered.</p>`;
   }
   function cmdList(snap) {
-    if (!snap.commands.length) return '<p class="hint">No commands yet. Simulated commands you send above appear here with each step.</p>';
-    return snap.commands.slice(0, 6).map((c) => `<div class="cmd"><div class="cmd-h"><b>${esc(c.actuator)} → ${esc(c.action)}</b>${C.cmdChip(c.status)}<span class="tag-demo">simulated</span></div>
+    if (!snap.commands || !snap.commands.length) return '<p class="hint">No commands yet. Commands you send above appear here with each step.</p>';
+    return snap.commands.slice(0, 6).map((c) => `<div class="cmd"><div class="cmd-h"><b>${esc(c.actuator)} → ${esc(c.action)}</b>${C.cmdChip(c.status)}${c.simulated ? '<span class="tag-demo">simulated</span>' : ''}</div>
       <ul class="steps">${c.history.map((h) => `<li><span class="mono">${esc(F.time(h.at))}</span><span>${C.cmdChip(h.status)} ${esc(h.note)}</span></li>`).join('')}</ul></div>`).join('') +
       '<p class="hint">A command never shows as done until the device answers. Without a feedback sensor, the last step is “Done · unconfirmed”.</p>';
   }
@@ -3089,23 +3255,25 @@ ORION.fmt = (function () {
     mount(el) {
       const c = A().config, t = c.thresholds;
       const num = (id, v, label, hint, opt) => `<label class="fld"><span>${esc(label)}</span><input type="number" id="${id}" value="${v == null ? '' : v}" ${opt || ''}><small>${esc(hint)}</small></label>`;
-      el.innerHTML = `<div class="page-h"><h1>Settings</h1><p>Saved in this browser for now.</p></div>
+      const snap = A().snap;
+      const roomRows = snap && snap.status === 'ok' && snap.sensors ? R.sensorList(snap).map((s) => [s.id, s.label || s.id]) : Object.keys(c.rooms).map((id) => [id, id]);
+      el.innerHTML = `<div class="page-h"><h1>Settings</h1><p>These settings are saved in this browser. Server-side settings (users, alert contacts, device thresholds) arrive with the ORION backend.</p></div>
       <section class="card"><h2>Appearance</h2><div class="set-row"><div><b>Theme</b><span class="hint">Both are designed to be easy on the eyes.</span></div><div class="seg">${[['dark', 'Calm dark', 'moon'], ['light', 'Calm light', 'sun']].map(([v, l, ic]) => `<button class="seg-b${(document.body.dataset.theme || 'dark') === v ? ' on' : ''}" data-action="theme" data-t="${v}" type="button">${I(ic)} ${l}</button>`).join('')}</div></div></section>
-      <section class="card"><h2>Data</h2><div class="set-row"><div><b>Data source</b><span class="hint">Demo uses a built-in simulation. Live needs the Phase 2 backend.</span></div><div class="seg" id="cfgMode"></div></div>
-        <div class="set-row"><div><b>Demo scenarios</b><span class="hint">Try smoke, flame, a leak, sensor faults or going offline.</span></div><button class="btn sm ghost" data-action="drawer-open">Open</button></div></section>
+      <section class="card"><h2>Data</h2><div class="set-row"><div><b>Data source</b><span class="hint">Simulation is a built-in test mode — every value is invented. Live shows only real data from an ORION server.</span></div><div class="seg" id="cfgMode"></div></div>
+        <div class="set-row"><div><b>Simulation scenarios</b><span class="hint">Try smoke, flame, a leak, sensor faults or going offline (simulation only).</span></div><button class="btn sm ghost" data-action="drawer-open"${isSim() ? '' : ' disabled'}>Open</button></div></section>
       <form id="cfg" class="stack">
         <section class="card"><h2>General</h2><div class="fgrid">
           <label class="fld"><span>Home name</span><input id="c-home" value="${esc(c.home.name)}" maxlength="60"></label>
           <label class="fld"><span>Time zone</span><select id="c-tz">${TZS.map((z) => `<option ${z === c.timezone ? 'selected' : ''}>${z}</option>`).join('')}</select></label>
           <label class="fld"><span>Temperature</span><select id="c-unit"><option value="C" ${c.tempUnit === 'C' ? 'selected' : ''}>°C</option><option value="F" ${c.tempUnit === 'F' ? 'selected' : ''}>°F</option></select></label>
         </div></section>
-        <section class="card"><h2>Room names</h2><div class="fgrid">${[['mq2-hall', 'Smoke & gas sensor'], ['flame-kitchen', 'Flame sensor'], ['water-utility', 'Water sensor'], ['dht22-living', 'Temperature & humidity']].map(([id, n]) => `<label class="fld"><span>${n}</span><input data-room="${id}" value="${esc(c.rooms[id])}" maxlength="40"></label>`).join('')}</div></section>
+        <section class="card"><h2>Room names</h2><div class="fgrid">${roomRows.map(([id, n]) => `<label class="fld"><span>${esc(n)}</span><input data-room="${esc(id)}" value="${esc(c.rooms[id] || '')}" maxlength="40"></label>`).join('')}</div></section>
         <section class="card"><h2>Alert levels</h2><p class="hint">These are the app’s levels. The device keeps its own (shown on each sensor) and those are what trigger the alarm. Saving here doesn’t change the hardware.</p><div class="fgrid">
           ${num('t-mq2w', t.mq2_warning, 'Smoke warning (raw)', 'Placeholder until calibrated', 'min="0" max="4095"')}${num('t-mq2c', t.mq2_critical, 'Smoke danger (raw)', 'Must be above warning', 'min="0" max="4095"')}
           ${num('t-wet', t.water_wet, 'Water “wet” (raw)', 'Depends on the sensor', 'min="0" max="4095"')}
           ${num('t-temp', t.temp_advisory_c, 'Hot room warning (°C)', 'Leave empty for none', 'step="0.5"')}${num('t-hum', t.humidity_advisory, 'Humid room warning (%)', 'Leave empty for none', 'min="0" max="100"')}</div></section>
         <section class="card"><h2>Text &amp; call alerts</h2><p class="hint">Sent by the SIM800C, not this app. Off until you add who should receive them.</p>
-          <label class="chk"><input type="checkbox" disabled> Text message alerts</label><label class="chk"><input type="checkbox" disabled> Phone call alerts</label></section>
+          <label class="chk"><input type="checkbox" disabled> Text message alerts</label><label class="chk"><input type="checkbox" disabled> Phone call alerts</label><p class="hint">Emergency contacts are stored on the ORION server (never in this browser) once it is connected.</p></section>
         <section class="card"><details class="more"><summary>Advanced</summary><div class="fgrid">${num('c-fresh', c.freshness.sensor_s, 'Mark readings old after (s)', 'Older readings show as “not updating”', 'min="5" max="600"')}${num('c-hb', c.freshness.heartbeat_s, 'Mark boards offline after (s)', 'No heartbeat in this time', 'min="5" max="600"')}</div></details></section>
         <div id="cfg-err" class="note crit" hidden></div>
         <div class="row-btns"><button class="btn" type="submit">Save</button><button class="btn ghost" type="button" data-action="cfg-reset">Reset</button></div>
@@ -3114,7 +3282,7 @@ ORION.fmt = (function () {
       <section class="card"><details class="more" id="diagBox"><summary>Diagnostics</summary><div id="dg"></div></details></section>
       <p class="hint center">ORION is a prototype. It is not a certified fire alarm, gas detector or safety system.</p>`;
       el.querySelector('#cfg').addEventListener('submit', (e) => { e.preventDefault(); saveConfig(el); });
-      el.querySelector('#cfgMode').innerHTML = ['demo', 'live'].map((m) => `<button class="seg-b${A().mode === m ? ' on' : ''}" data-action="mode" data-mode="${m}" type="button">${m === 'demo' ? 'Demo' : 'Live'}</button>`).join('');
+      el.querySelector('#cfgMode').innerHTML = ['demo', 'live'].map((m) => `<button class="seg-b${A().mode === m ? ' on' : ''}" data-action="mode" data-mode="${m}" type="button">${m === 'demo' ? 'Simulation' : 'Live'}</button>`).join('');
     },
     update(el) {
       const box = el.querySelector('#diagBox');
@@ -3123,12 +3291,12 @@ ORION.fmt = (function () {
       const g = C.guard(ev, 1);
       if (g) return set(el, '#dg', g);
       const now = Date.now();
-      const recent = Object.keys(ORION.sources.SERIES).reduce((acc, k) => acc.concat(A().source.history(k, now - 60e3, now)), []);
+      const recent = R.seriesList(snap).filter((x) => x.metric !== 'hum').reduce((acc, x) => acc.concat(A().source.history(x.key, now - 60e3, now) || []), []);
       const delay = recent.length ? recent.reduce((s, p) => s + (p.r - p.t), 0) / recent.length / 1000 : null;
       set(el, '#dg', `<h3>Boards</h3><table class="tbl"><thead><tr><th>Board</th><th>Heartbeat</th><th>Last seen</th><th>Firmware</th></tr></thead><tbody>${Object.entries(snap.controllers).map(([k, c]) => `<tr><td>${esc(c.name)}</td><td>${ev.controllers[k].online ? C.chip('ok', 'OK') : C.chip('crit', 'Missing')}</td><td>${esc(F.ago(c.last_seen_at, now))}</td><td class="mono">${esc(c.firmware_version)}</td></tr>`).join('')}</tbody></table>
-        <h3>Sensors</h3><table class="tbl"><thead><tr><th>Sensor</th><th>Quality</th><th>Measured</th><th>Delay</th><th>Seq</th></tr></thead><tbody>${ORION.state.SENSOR_ORDER.map((id) => { const s = snap.sensors[id]; return `<tr><td>${esc(s.label)}</td><td>${esc(ev.sensors[id].status === 'stale' ? 'stale' : s.quality)}</td><td class="mono">${esc(F.time(s.recorded_at))}</td><td class="mono">${((s.received_at - s.recorded_at) / 1000).toFixed(2)} s</td><td class="mono">${s.sequence}</td></tr>`; }).join('')}</tbody></table>
-        <h3>Data pipeline</h3>${C.kv([['Readings in last minute', String(recent.length)], ['Average delay', delay == null ? '—' : delay.toFixed(2) + ' s'], ['Missing messages', String(snap.pipeline.seqGaps)], ['GSM', `${snap.gsm.module} · ${ev.gsm.reported ? (snap.gsm.network_registered ? 'registered, CSQ ' + snap.gsm.csq : 'not registered') : 'no report'} · 2G only (Jio SIMs won’t work)`], ['Mode', A().mode === 'demo' ? 'demo (seed ' + A().source.seed + ', scenario ' + A().source.scenario + ')' : 'live']])}
-        <h3>Log</h3><div class="log">${snap.logs.slice(0, 40).map((l) => `<div class="log-r lv-${l.level}"><span class="mono">${esc(F.time(l.at))}</span><span class="lv">${esc(l.level)}</span><span>${esc(l.msg)}</span></div>`).join('')}</div>`);
+        <h3>Sensors</h3><table class="tbl"><thead><tr><th>Sensor</th><th>Quality</th><th>Measured</th><th>Delay</th><th>Seq</th></tr></thead><tbody>${R.sensorList(snap).map((s) => `<tr><td>${esc(s.label || s.id)}</td><td>${esc(ev.sensors[s.id].status === 'stale' ? 'stale' : s.quality)}</td><td class="mono">${esc(F.time(s.recorded_at))}</td><td class="mono">${s.received_at == null ? '—' : ((s.received_at - s.recorded_at) / 1000).toFixed(2) + ' s'}</td><td class="mono">${s.sequence == null ? '—' : s.sequence}</td></tr>`).join('')}</tbody></table>
+        <h3>Data pipeline</h3>${C.kv([['Readings in last minute', String(recent.length)], ['Average delay', delay == null ? '—' : delay.toFixed(2) + ' s'], ['Missing messages', snap.pipeline ? String(snap.pipeline.seqGaps) : '—'], ['GSM', snap.gsm ? `${snap.gsm.module} · ${ev.gsm.reported ? (snap.gsm.network_registered ? 'registered, CSQ ' + snap.gsm.csq : 'not registered') : 'no report'} · 2G only (Jio SIMs won’t work)` : 'not registered'], ['Mode', isSim() ? 'SIMULATION (seed ' + A().source.seed + ', scenario ' + A().source.scenario + ')' : 'live']])}
+        <h3>Log</h3><div class="log">${(snap.logs || []).slice(0, 40).map((l) => `<div class="log-r lv-${l.level}"><span class="mono">${esc(F.time(l.at))}</span><span class="lv">${esc(l.level)}</span><span>${esc(l.msg)}</span></div>`).join('')}</div>`);
     },
   };
   function saveConfig(el) {
@@ -3153,12 +3321,12 @@ ORION.fmt = (function () {
     c.configVersion = 'cfg-local-' + Date.now().toString(36);
     app.config = c;
     const ok = U.store.set('orion.config.v1', c);
-    if (app.source.logs) app.source.logs.unshift({ at: Date.now(), level: 'info', msg: `audit: settings saved by Demo Owner${changed ? ' (alert levels changed)' : ''}` });
+    if (app.source.logs) app.source.logs.unshift({ at: Date.now(), level: 'info', msg: `audit: settings saved by ${app.user.name}${changed ? ' (alert levels changed)' : ''}` });
     app.toast(ok ? 'Settings saved.' : 'Settings applied for this visit (browser storage unavailable).');
     app.onData();
   }
 
-  ORION.views = { home, history, alerts, devices, aura: ORION.auraView, config, _: { buildCSV, RANGES, sensorSheet, TILES } };
+  ORION.views = { home, history, alerts, devices, aura: ORION.auraView, config, _: { buildCSV, RANGES, sensorSheet, tilesOf, curSeries } };
 })();
 
 /* ORION app shell: routing, header + tabs, sheets/dialogs, demo controls, global actions. */
@@ -3167,20 +3335,33 @@ ORION.fmt = (function () {
   const U = ORION.util, F = ORION.fmt, esc = U.esc, C = ORION.ui, I = C.icon;
   const NAV = [['home', 'Home', 'home'], ['history', 'History', 'chart'], ['alerts', 'Alerts', 'alert'], ['devices', 'Devices', 'sliders'], ['aura', 'Aura', 'aura'], ['config', 'Settings', 'gear']];
 
+  /* Saved settings are merged onto the current defaults, so new fields appear and old ones survive upgrades.
+     Values are re-validated; anything invalid falls back to its default instead of discarding everything. */
   function loadConfig() {
     const d = ORION.defaultConfig();
     const s = U.store.get('orion.config.v1', null);
-    if (!s || s.version !== d.version) return d;
-    return Object.assign(d, s, { freshness: Object.assign(d.freshness, s.freshness), thresholds: Object.assign(d.thresholds, s.thresholds), rooms: Object.assign(d.rooms, s.rooms) });
+    if (!s || typeof s !== 'object') return d;
+    const num = (v, lo, hi, def) => (typeof v === 'number' && isFinite(v) && v >= lo && v <= hi ? v : def);
+    const out = Object.assign(d, {
+      home: Object.assign(d.home, s.home && typeof s.home.name === 'string' ? { name: s.home.name.slice(0, 60) } : {}),
+      timezone: typeof s.timezone === 'string' ? s.timezone : d.timezone,
+      tempUnit: s.tempUnit === 'F' ? 'F' : 'C',
+      freshness: { sensor_s: num(s.freshness && s.freshness.sensor_s, 5, 600, d.freshness.sensor_s), heartbeat_s: num(s.freshness && s.freshness.heartbeat_s, 5, 600, d.freshness.heartbeat_s) },
+      thresholds: Object.assign(d.thresholds, s.thresholds || {}),
+      rooms: Object.assign(d.rooms, s.rooms || {}),
+      configVersion: s.configVersion || d.configVersion,
+    });
+    out.version = d.version;
+    return out;
   }
 
   const app = (ORION.app = {
     config: loadConfig(), mode: 'demo', source: null, snap: null, ev: null, lastOkAt: null, route: 'home', view: null, _sheet: null,
     ui: {
-      tick: 0, histRange: '6h', histSeries: 'mq2', incFilter: 'active', openAlerts: new Set(), speakingIdx: null,
+      tick: 0, histRange: '6h', histSeries: null, incFilter: 'active', openAlerts: new Set(), speakingIdx: null,
       auraMsgs: [], auraVoice: U.store.get('orion.aura.voice', 'rounded'), auraHandsFree: U.store.get('orion.aura.handsfree', false) === true, auraRate: U.store.get('orion.aura.rate', 1), auraLang: U.store.get('orion.aura.lang', 'auto'), auraTier: U.store.get('orion.aura.tier', 'quick'), auraSpeak: U.store.get('orion.aura.speak', true) !== false,
     },
-    user: { name: 'Demo Owner', role: 'owner' },
+    user: { name: 'Simulation user', role: 'owner' },
     toast(msg, kind) {
       const box = document.getElementById('toasts');
       const t = document.createElement('div'); t.className = 'toast ' + (kind || ''); t.textContent = msg; box.appendChild(t);
@@ -3201,8 +3382,15 @@ ORION.fmt = (function () {
 
   app.onData = function () {
     this.ui.tick++;
-    this.snap = this.source.snapshot();
-    this.ev = ORION.state.evaluate(this.snap, this.config, Date.now());
+    try {
+      this.snap = this.source.snapshot();
+      this.ev = ORION.state.evaluate(this.snap, this.config, Date.now());
+    } catch (e) {
+      // Never show stale-but-plausible values after an internal error: degrade to an explicit error state.
+      console.error(e);
+      this.snap = { status: 'error', error: { code: 'client', message: 'ORION could not process the latest data (' + (e && e.message) + ')' }, at: Date.now() };
+      this.ev = ORION.state.evaluate(this.snap, this.config, Date.now());
+    }
     if (this.snap.status === 'ok') this.lastOkAt = this.snap.at;
     renderHeader();
     if (this.view && this.view.update) { try { this.view.update(document.getElementById('view')); } catch (e) { console.error(e); } }
@@ -3212,7 +3400,16 @@ ORION.fmt = (function () {
   app.go = function (r) { if (location.hash.replace('#', '') === r) this.mountView(); else location.hash = r; };
   app.confirmCommand = function (key) {
     const c = CMDS[key]; if (!c) return;
-    confirmBox({ title: c.title, body: `<p>${c.body}</p>`, confirm: 'Send', onConfirm() { app.source.command({ actuator: c.actuator, action: c.action, actor: app.user.name }); app.toast('Command sent (simulated). See “Recent commands” on Devices.'); app.onData(); } });
+    const sim = app.mode === 'demo';
+    const body = `<p>${c.body}</p>${sim ? '<p class="hint"><b>Simulation:</b> no real device receives this command.</p>' : ''}`;
+    confirmBox({ title: c.title, body, confirm: 'Send', onConfirm() {
+      // A command is only reported as sent once the data source accepted it; its real outcome is shown step by step.
+      Promise.resolve().then(() => app.source.command({ actuator: c.actuator, action: c.action, actor: app.user.name })).then((r) => {
+        if (r && r.ok) app.toast(sim ? 'Simulated command queued. Follow its steps under “Recent commands”.' : 'Command queued. Follow its steps under “Recent commands”.');
+        else app.toast('Command not sent: ' + ((r && r.error) || 'no response from the data source'), 'bad');
+        app.onData();
+      }, (e) => { app.toast('Command not sent: ' + ((e && e.message) || 'error'), 'bad'); app.onData(); });
+    } });
   };
 
   /* Aura side panel — available on every page */
@@ -3232,8 +3429,14 @@ ORION.fmt = (function () {
     this.view = ORION.views[this.route];
     el.innerHTML = '';
     el.className = 'page-' + this.route;
-    this.view.mount(el);
-    this.view.update(el, true);
+    try {
+      this.view.mount(el);
+      this.view.update(el, true);
+    } catch (e) {
+      console.error(e);
+      el.innerHTML = C.statePanel('error', 'This page failed to load', 'An internal error stopped this page from rendering. Other pages still work. Details: ' + (e && e.message));
+      this.view = { title: this.view.title, update() {} };
+    }
     document.title = `${this.view.title} · ORION`;
     document.querySelectorAll('[data-r]').forEach((a) => { const on = a.dataset.r === this.route; a.classList.toggle('on', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   };
@@ -3255,6 +3458,7 @@ ORION.fmt = (function () {
     document.getElementById('tabs').innerHTML = links;
     document.getElementById('btabs').innerHTML = links;
     document.getElementById('demoBar').hidden = app.mode !== 'demo';
+    document.body.classList.toggle('is-sim', app.mode === 'demo');
   }
   function renderHeader() {
     const ev = app.ev; if (!ev) return;
@@ -3274,8 +3478,9 @@ ORION.fmt = (function () {
     if (!open) { d.hidden = true; return; }
     const groups = {};
     for (const s of ORION.sources.SCENARIOS) (groups[s.group] = groups[s.group] || []).push(s);
-    d.innerHTML = `<div class="dr-in" role="dialog" aria-label="Demo scenarios"><div class="sec-h"><h2>Try a scenario</h2><button class="round sm" data-action="drawer-close" aria-label="Close">${I('x')}</button></div>
-      <p class="hint">Make the simulated house do something and watch ORION respond.</p>
+    if (app.mode !== 'demo') { d.hidden = true; return; }
+    d.innerHTML = `<div class="dr-in" role="dialog" aria-label="Simulation scenarios"><div class="sec-h"><h2>Simulation scenarios</h2><button class="round sm" data-action="drawer-close" aria-label="Close">${I('x')}</button></div>
+      <p class="hint">Make the simulated house do something and watch ORION respond. Nothing here touches real hardware.</p>
       ${Object.entries(groups).map(([g, list]) => `<div class="dr-g"><div class="dr-gt">${esc(g)}</div>${list.map((s) => `<button class="dr-s${app.source.scenario === s.id ? ' on' : ''}" data-action="scenario" data-s="${s.id}"><b>${esc(s.label)}</b><span>${esc(s.hint)}</span></button>`).join('')}</div>`).join('')}</div>`;
     d.hidden = false;
   }
@@ -3303,9 +3508,9 @@ ORION.fmt = (function () {
   };
 
   const CMDS = {
-    'fan:on': { actuator: 'fan', action: 'on', title: 'Turn the fan on?', body: 'This is a <b>simulated</b> command — no real fan receives it. You’ll see each step: requested → queued → sent → accepted. The fan can’t report back, so it ends as “Done · unconfirmed”.' },
-    'fan:off': { actuator: 'fan', action: 'off', title: 'Turn the fan off?', body: 'This is a <b>simulated</b> command. The device refuses to switch the fan off during smoke and for 60 s afterwards.' },
-    'buzzer:test': { actuator: 'buzzer', action: 'test', title: 'Test the buzzer for 2 seconds?', body: 'This is a <b>simulated</b> command — no real buzzer receives it.' },
+    'fan:on': { actuator: 'fan', action: 'on', title: 'Turn the fan on?', body: 'You’ll see each step: requested → queued → sent → accepted. The fan has no feedback sensor, so it ends as “Done · unconfirmed” — ORION never claims it physically turned on.' },
+    'fan:off': { actuator: 'fan', action: 'off', title: 'Turn the fan off?', body: 'The safety controller refuses to switch the fan off during smoke and for 60 s afterwards.' },
+    'buzzer:test': { actuator: 'buzzer', action: 'test', title: 'Test the buzzer for 2 seconds?', body: 'The buzzer has no feedback sensor — listen for it to confirm it works.' },
   };
 
   /* ---------- global click handling ---------- */
@@ -3314,7 +3519,7 @@ ORION.fmt = (function () {
     if (!t) return;
     const a = t.dataset.action;
     if (ORION.auraActions[a]) return ORION.auraActions[a](t);
-    if (a === 'mode') { app.setSource(t.dataset.mode); app.mountView(); app.toast(t.dataset.mode === 'demo' ? 'Using demo data.' : 'Live mode — no backend yet, so ORION shows no values rather than inventing them.'); }
+    if (a === 'mode') { app.setSource(t.dataset.mode); app.mountView(); app.toast(t.dataset.mode === 'demo' ? 'Simulation mode — every value is invented test data.' : 'Live mode — ORION shows only real data, never invented values.'); }
     else if (a === 'scenario') { app.source.setScenario(t.dataset.s); scenarioDrawer(true); }
     else if (a === 'drawer-open') scenarioDrawer(document.getElementById('drawer').hidden);
     else if (a === 'drawer-close') scenarioDrawer(false);
@@ -3336,9 +3541,10 @@ ORION.fmt = (function () {
     else if (a === 'hseries') { app.ui.histSeries = t.dataset.s; app.mountView(); }
     else if (a === 'inc-filter') { app.ui.incFilter = t.dataset.f; app.mountView(); }
     else if (a === 'csv-dl') {
-      const to = Date.now(), from = to - ORION.views._.RANGES[app.ui.histRange], ser = app.ui.histSeries;
+      const to = Date.now(), from = to - ORION.views._.RANGES[app.ui.histRange], ser = ORION.views._.curSeries(app.snap);
+      if (!ser) { app.toast('No sensor history to export.', 'bad'); return; }
       const csv = ORION.views._.buildCSV(ser, from, to), rows = csv.split('\n').length - 1;
-      const name = `orion-${app.mode}-${ser}-${app.ui.histRange}.csv`;
+      const name = `orion-${app.mode === 'demo' ? 'SIMULATION' : 'live'}-${ser.replace(/[^a-z0-9-]+/gi, '_')}-${app.ui.histRange}.csv`;
       (async () => {
         let saved = false;
         try { const dl = window.claude && window.claude.use ? await window.claude.use('downloads') : null; if (dl) { await dl.save({ filename: name, data: csv }); saved = true; } } catch (err) { /* declined */ }

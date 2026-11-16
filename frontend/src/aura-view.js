@@ -48,7 +48,7 @@
   }
   function footNote() {
     const L = lang(), notes = [];
-    if (AI.cap.ready && !aiOn()) notes.push('Open ORION inside Claude and allow Aura to use Claude for full conversation in your language.');
+    if (AI.cap.ready && !aiOn()) notes.push('Aura’s AI isn’t connected here, so it answers in basic English from ORION data. Full conversation needs the ORION server’s Aura service.');
     else if (L.tier === 'other') notes.push(`${L.name} isn’t in Anthropic’s published language benchmark — double-check important answers.`);
     if (AI.cap.ready && !AI.speechAvailable()) notes.push(AI.PLATFORM.android ? 'The Claude Android app can’t play voices from web pages — Aura answers in text here. For voice, open ORION in Chrome.' : 'Voice replies aren’t available in this app — Aura answers in text.');
     if (ui().auraSpeak && AI.speechAvailable() && !AI.canSpeak(L.code)) notes.push(`Spoken replies aren’t available in ${L.name} here — text only.`);
@@ -482,7 +482,7 @@
       <div class="vo-mid" data-action="voice-orb"><button class="vo-orb" data-action="voice-orb" aria-label="Talk to Aura"><span class="vo-ring"></span><span class="vo-core"></span></button>
       <div class="vo-label" aria-live="polite"></div><div class="vo-hint hint"></div><p class="vo-you" dir="auto"></p><p class="vo-aura" dir="auto" aria-live="polite"></p>
       <form class="vo-kb" id="vo-kb" autocomplete="off" data-action="noop"><input id="vo-in" dir="auto" enterkeyhint="send" autocapitalize="sentences" aria-label="Speak or type to Aura"><button class="round send" aria-label="Send">${I('send')}</button></form></div>
-      <div class="vo-foot">${!AI.speechAvailable() ? `<p class="vo-warn">${I('info')}${AI.PLATFORM.android ? 'The Claude Android app can’t play voices from web pages, so Aura will answer in text here. Open in Chrome to hear Aura.' : 'This app can’t play voices from web pages, so Aura will answer in text here.'}</p>` : ''}<div class="vo-alt"><button class="mini" data-action="voice-type">${I('sliders')}Type instead</button>${AI.PLATFORM.android ? `<a class="mini" href="${ARTIFACT_URL}">${I('globe')}Hands-free: open in Chrome</a>` : ''}</div><span class="hint">Aura can’t control devices by itself. In an emergency, call 112.</span></div>`;
+      <div class="vo-foot">${!AI.speechAvailable() ? `<p class="vo-warn">${I('info')}${AI.PLATFORM.android ? 'The Claude Android app can’t play voices from web pages, so Aura will answer in text here. Open in Chrome to hear Aura.' : 'This app can’t play voices from web pages, so Aura will answer in text here.'}</p>` : ''}<div class="vo-alt"><button class="mini" data-action="voice-type">${I('sliders')}Type instead</button>${AI.PLATFORM.android && AI.cap.host === 'claude' ? `<a class="mini" href="${ARTIFACT_URL}">${I('globe')}Hands-free: open in Chrome</a>` : ''}</div><span class="hint">Aura can’t control devices by itself. In an emergency, call 112.</span></div>`;
     document.body.appendChild(o);
     {
       const inp = o.querySelector('#vo-in');
@@ -515,12 +515,6 @@
     const said = i.value.trim(); if (!said) return;
     i.value = ''; i.blur(); // close the keyboard so the answer can be heard and seen
     V.heard = said; V.state = 'thinking'; vRender(); send(said, true);
-  }
-  function kbTip() {
-    const P = AI.PLATFORM;
-    if (P.ios) return 'On iPhone: tap the box, then the mic on the keyboard and speak. Aura sends when you pause. (Turn on Dictation in Settings › General › Keyboard if you don’t see the mic.)';
-    if (P.android) return 'On Android: tap the box, then the mic on your keyboard (Gboard supports മലയാളം, हिन्दी and more). Aura sends when you pause.';
-    return 'Use your keyboard’s or system’s dictation to speak. Aura sends when you pause.';
   }
   function orbTap() {
     V.kb = !AI.cap.dict;
@@ -584,9 +578,9 @@
     return `<div class="sh-head">${I('info', 'sh-ic')}<div><h2 id="md-t">What’s working</h2><span class="hint">Aura checks this each time you open it.</span></div></div>
       <ul class="diag">${row(ai[0], 'Conversation (AI)', ai[1])}${row(voice[0], 'Talking back', voice[1] + (voice[0] ? (ui().auraSpeak ? ' · on' : ' · off — tap “Read replies aloud”') : ''))}
       ${voice[0] ? `<li class="test-li"><button class="btn sm" data-action="voice-test">${I('speaker')}Test voice</button><span class="hint">You should hear Aura say hello.</span></li>` : ''}
-      ${row(!!c.dict, 'Microphone', c.dict ? 'Available — tap the mic and speak' : 'Not available here — type, or use your phone keyboard’s mic')}
+      ${row(!!c.dict, 'Microphone', c.dict ? (c.dict.kind === 'browser' ? 'Browser speech recognition — tap the mic and speak (your browser may send audio to its speech service)' : 'Available — tap the mic and speak') : 'Not available here — type, or use your phone keyboard’s mic')}
       ${row(AI.canSpeak(L.code) || L.code === 'auto', 'Reply language', `${L.name}${voice[0] && !AI.canSpeak(L.code) && L.code !== 'auto' ? ' — no voice for this language here, text only' : ''}`)}</ul>
-      <h3>Problem report</h3><p class="hint">Copy this (or take a screenshot of it) and paste it into your Claude chat.</p>
+      <h3>Problem report</h3><p class="hint">Copy this (or take a screenshot of it) when reporting a problem.</p>
       <pre class="report" id="au-report">${esc(report())}</pre>
       <div class="row-btns" style="margin:8px 0 0"><button class="btn sm" data-action="aura-copyreport">${I('check')}Copy report</button></div>
       <h3>Talking to Aura on ${esc(AI.PLATFORM.name)}</h3><ul class="tips">${platformTips()}</ul>

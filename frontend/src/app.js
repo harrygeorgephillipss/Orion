@@ -4,20 +4,33 @@
   const U = ORION.util, F = ORION.fmt, esc = U.esc, C = ORION.ui, I = C.icon;
   const NAV = [['home', 'Home', 'home'], ['history', 'History', 'chart'], ['alerts', 'Alerts', 'alert'], ['devices', 'Devices', 'sliders'], ['aura', 'Aura', 'aura'], ['config', 'Settings', 'gear']];
 
+  /* Saved settings are merged onto the current defaults, so new fields appear and old ones survive upgrades.
+     Values are re-validated; anything invalid falls back to its default instead of discarding everything. */
   function loadConfig() {
     const d = ORION.defaultConfig();
     const s = U.store.get('orion.config.v1', null);
-    if (!s || s.version !== d.version) return d;
-    return Object.assign(d, s, { freshness: Object.assign(d.freshness, s.freshness), thresholds: Object.assign(d.thresholds, s.thresholds), rooms: Object.assign(d.rooms, s.rooms) });
+    if (!s || typeof s !== 'object') return d;
+    const num = (v, lo, hi, def) => (typeof v === 'number' && isFinite(v) && v >= lo && v <= hi ? v : def);
+    const out = Object.assign(d, {
+      home: Object.assign(d.home, s.home && typeof s.home.name === 'string' ? { name: s.home.name.slice(0, 60) } : {}),
+      timezone: typeof s.timezone === 'string' ? s.timezone : d.timezone,
+      tempUnit: s.tempUnit === 'F' ? 'F' : 'C',
+      freshness: { sensor_s: num(s.freshness && s.freshness.sensor_s, 5, 600, d.freshness.sensor_s), heartbeat_s: num(s.freshness && s.freshness.heartbeat_s, 5, 600, d.freshness.heartbeat_s) },
+      thresholds: Object.assign(d.thresholds, s.thresholds || {}),
+      rooms: Object.assign(d.rooms, s.rooms || {}),
+      configVersion: s.configVersion || d.configVersion,
+    });
+    out.version = d.version;
+    return out;
   }
 
   const app = (ORION.app = {
     config: loadConfig(), mode: 'demo', source: null, snap: null, ev: null, lastOkAt: null, route: 'home', view: null, _sheet: null,
     ui: {
-      tick: 0, histRange: '6h', histSeries: 'mq2', incFilter: 'active', openAlerts: new Set(), speakingIdx: null,
+      tick: 0, histRange: '6h', histSeries: null, incFilter: 'active', openAlerts: new Set(), speakingIdx: null,
       auraMsgs: [], auraVoice: U.store.get('orion.aura.voice', 'rounded'), auraHandsFree: U.store.get('orion.aura.handsfree', false) === true, auraRate: U.store.get('orion.aura.rate', 1), auraLang: U.store.get('orion.aura.lang', 'auto'), auraTier: U.store.get('orion.aura.tier', 'quick'), auraSpeak: U.store.get('orion.aura.speak', true) !== false,
     },
-    user: { name: 'Demo Owner', role: 'owner' },
+    user: { name: 'Simulation user', role: 'owner' },
     toast(msg, kind) {
       const box = document.getElementById('toasts');
       const t = document.createElement('div'); t.className = 'toast ' + (kind || ''); t.textContent = msg; box.appendChild(t);
@@ -38,8 +51,15 @@
 
   app.onData = function () {
     this.ui.tick++;
-    this.snap = this.source.snapshot();
-    this.ev = ORION.state.evaluate(this.snap, this.config, Date.now());
+    try {
+      this.snap = this.source.snapshot();
+      this.ev = ORION.state.evaluate(this.snap, this.config, Date.now());
+    } catch (e) {
+      // Never show stale-but-plausible values after an internal error: degrade to an explicit error state.
+      console.error(e);
+      this.snap = { status: 'error', error: { code: 'client', message: 'ORION could not process the latest data (' + (e && e.message) + ')' }, at: Date.now() };
+      this.ev = ORION.state.evaluate(this.snap, this.config, Date.now());
+    }
     if (this.snap.status === 'ok') this.lastOkAt = this.snap.at;
     renderHeader();
     if (this.view && this.view.update) { try { this.view.update(document.getElementById('view')); } catch (e) { console.error(e); } }
@@ -49,7 +69,16 @@
   app.go = function (r) { if (location.hash.replace('#', '') === r) this.mountView(); else location.hash = r; };
   app.confirmCommand = function (key) {
     const c = CMDS[key]; if (!c) return;
-    confirmBox({ title: c.title, body: `<p>${c.body}</p>`, confirm: 'Send', onConfirm() { app.source.command({ actuator: c.actuator, action: c.action, actor: app.user.name }); app.toast('Command sent (simulated). See “Recent commands” on Devices.'); app.onData(); } });
+    const sim = app.mode === 'demo';
+    const body = `<p>${c.body}</p>${sim ? '<p class="hint"><b>Simulation:</b> no real device receives this command.</p>' : ''}`;
+    confirmBox({ title: c.title, body, confirm: 'Send', onConfirm() {
+      // A command is only reported as sent once the data source accepted it; its real outcome is shown step by step.
+      Promise.resolve().then(() => app.source.command({ actuator: c.actuator, action: c.action, actor: app.user.name })).then((r) => {
+        if (r && r.ok) app.toast(sim ? 'Simulated command queued. Follow its steps under “Recent commands”.' : 'Command queued. Follow its steps under “Recent commands”.');
+        else app.toast('Command not sent: ' + ((r && r.error) || 'no response from the data source'), 'bad');
+        app.onData();
+      }, (e) => { app.toast('Command not sent: ' + ((e && e.message) || 'error'), 'bad'); app.onData(); });
+    } });
   };
 
   /* Aura side panel — available on every page */
@@ -69,8 +98,14 @@
     this.view = ORION.views[this.route];
     el.innerHTML = '';
     el.className = 'page-' + this.route;
-    this.view.mount(el);
-    this.view.update(el, true);
+    try {
+      this.view.mount(el);
+      this.view.update(el, true);
+    } catch (e) {
+      console.error(e);
+      el.innerHTML = C.statePanel('error', 'This page failed to load', 'An internal error stopped this page from rendering. Other pages still work. Details: ' + (e && e.message));
+      this.view = { title: this.view.title, update() {} };
+    }
     document.title = `${this.view.title} · ORION`;
     document.querySelectorAll('[data-r]').forEach((a) => { const on = a.dataset.r === this.route; a.classList.toggle('on', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   };
@@ -92,6 +127,7 @@
     document.getElementById('tabs').innerHTML = links;
     document.getElementById('btabs').innerHTML = links;
     document.getElementById('demoBar').hidden = app.mode !== 'demo';
+    document.body.classList.toggle('is-sim', app.mode === 'demo');
   }
   function renderHeader() {
     const ev = app.ev; if (!ev) return;
@@ -111,8 +147,9 @@
     if (!open) { d.hidden = true; return; }
     const groups = {};
     for (const s of ORION.sources.SCENARIOS) (groups[s.group] = groups[s.group] || []).push(s);
-    d.innerHTML = `<div class="dr-in" role="dialog" aria-label="Demo scenarios"><div class="sec-h"><h2>Try a scenario</h2><button class="round sm" data-action="drawer-close" aria-label="Close">${I('x')}</button></div>
-      <p class="hint">Make the simulated house do something and watch ORION respond.</p>
+    if (app.mode !== 'demo') { d.hidden = true; return; }
+    d.innerHTML = `<div class="dr-in" role="dialog" aria-label="Simulation scenarios"><div class="sec-h"><h2>Simulation scenarios</h2><button class="round sm" data-action="drawer-close" aria-label="Close">${I('x')}</button></div>
+      <p class="hint">Make the simulated house do something and watch ORION respond. Nothing here touches real hardware.</p>
       ${Object.entries(groups).map(([g, list]) => `<div class="dr-g"><div class="dr-gt">${esc(g)}</div>${list.map((s) => `<button class="dr-s${app.source.scenario === s.id ? ' on' : ''}" data-action="scenario" data-s="${s.id}"><b>${esc(s.label)}</b><span>${esc(s.hint)}</span></button>`).join('')}</div>`).join('')}</div>`;
     d.hidden = false;
   }
@@ -140,9 +177,9 @@
   };
 
   const CMDS = {
-    'fan:on': { actuator: 'fan', action: 'on', title: 'Turn the fan on?', body: 'This is a <b>simulated</b> command — no real fan receives it. You’ll see each step: requested → queued → sent → accepted. The fan can’t report back, so it ends as “Done · unconfirmed”.' },
-    'fan:off': { actuator: 'fan', action: 'off', title: 'Turn the fan off?', body: 'This is a <b>simulated</b> command. The device refuses to switch the fan off during smoke and for 60 s afterwards.' },
-    'buzzer:test': { actuator: 'buzzer', action: 'test', title: 'Test the buzzer for 2 seconds?', body: 'This is a <b>simulated</b> command — no real buzzer receives it.' },
+    'fan:on': { actuator: 'fan', action: 'on', title: 'Turn the fan on?', body: 'You’ll see each step: requested → queued → sent → accepted. The fan has no feedback sensor, so it ends as “Done · unconfirmed” — ORION never claims it physically turned on.' },
+    'fan:off': { actuator: 'fan', action: 'off', title: 'Turn the fan off?', body: 'The safety controller refuses to switch the fan off during smoke and for 60 s afterwards.' },
+    'buzzer:test': { actuator: 'buzzer', action: 'test', title: 'Test the buzzer for 2 seconds?', body: 'The buzzer has no feedback sensor — listen for it to confirm it works.' },
   };
 
   /* ---------- global click handling ---------- */
@@ -151,7 +188,7 @@
     if (!t) return;
     const a = t.dataset.action;
     if (ORION.auraActions[a]) return ORION.auraActions[a](t);
-    if (a === 'mode') { app.setSource(t.dataset.mode); app.mountView(); app.toast(t.dataset.mode === 'demo' ? 'Using demo data.' : 'Live mode — no backend yet, so ORION shows no values rather than inventing them.'); }
+    if (a === 'mode') { app.setSource(t.dataset.mode); app.mountView(); app.toast(t.dataset.mode === 'demo' ? 'Simulation mode — every value is invented test data.' : 'Live mode — ORION shows only real data, never invented values.'); }
     else if (a === 'scenario') { app.source.setScenario(t.dataset.s); scenarioDrawer(true); }
     else if (a === 'drawer-open') scenarioDrawer(document.getElementById('drawer').hidden);
     else if (a === 'drawer-close') scenarioDrawer(false);
@@ -173,9 +210,10 @@
     else if (a === 'hseries') { app.ui.histSeries = t.dataset.s; app.mountView(); }
     else if (a === 'inc-filter') { app.ui.incFilter = t.dataset.f; app.mountView(); }
     else if (a === 'csv-dl') {
-      const to = Date.now(), from = to - ORION.views._.RANGES[app.ui.histRange], ser = app.ui.histSeries;
+      const to = Date.now(), from = to - ORION.views._.RANGES[app.ui.histRange], ser = ORION.views._.curSeries(app.snap);
+      if (!ser) { app.toast('No sensor history to export.', 'bad'); return; }
       const csv = ORION.views._.buildCSV(ser, from, to), rows = csv.split('\n').length - 1;
-      const name = `orion-${app.mode}-${ser}-${app.ui.histRange}.csv`;
+      const name = `orion-${app.mode === 'demo' ? 'SIMULATION' : 'live'}-${ser.replace(/[^a-z0-9-]+/gi, '_')}-${app.ui.histRange}.csv`;
       (async () => {
         let saved = false;
         try { const dl = window.claude && window.claude.use ? await window.claude.use('downloads') : null; if (dl) { await dl.save({ filename: name, data: csv }); saved = true; } } catch (err) { /* declined */ }

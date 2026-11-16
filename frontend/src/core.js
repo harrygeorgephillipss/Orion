@@ -55,7 +55,7 @@ ORION.defaultConfig = function () {
 
 /* Decisions the brief says must not be guessed. Shown across the app. */
 ORION.pending = [
-  { key: 'boards', title: 'UNO vs ESP32 responsibilities', detail: 'Demo routes all telemetry through the ESP32 as gateway. This is an illustrative assumption, not the real wiring.' },
+  { key: 'boards', title: 'UNO vs ESP32 responsibilities', detail: 'Planned (docs/hardware-architecture.md): the UNO reads all sensors and drives all outputs; the ESP32 is the Wi-Fi/MQTT gateway and runs the SIM800C. Not yet built or tested on hardware.' },
   { key: 'pins', title: 'Pin map and actual wiring', detail: 'No pins are shown or assumed anywhere in ORION.' },
   { key: 'mq2', title: 'MQ-2 calibration and thresholds', detail: 'Values are raw ADC, not ppm. 350/500 are placeholder thresholds.' },
   { key: 'mq2_level', title: 'Which MQ-2 level triggers local actions', detail: 'Demo firmware triggers fan, buzzer, LEDs and door at the warning threshold.' },
@@ -67,11 +67,11 @@ ORION.pending = [
   { key: 'smoke_sms', title: 'Smoke → SMS/call policy', detail: 'Not specified in the brief. No SMS is sent for smoke in the demo.' },
   { key: 'dht', title: 'DHT22 wiring, read interval and advisory thresholds', detail: 'Advisory thresholds are unset.' },
   { key: 'relay', title: 'Relay channel count, mapping and active level', detail: 'Not assumed active-LOW. Demo maps CH1 to the fan as an illustration.' },
-  { key: 'mist', title: 'Mist maker purpose and interlocks', detail: 'Remote control disabled. Never activated automatically.' },
+  { key: 'mist', title: 'Mist maker', detail: 'Not in the current hardware inventory. Kept as a disabled placeholder; never activated automatically.' },
   { key: 'sg90', title: 'SG90 mechanical purpose', detail: 'Generic servo card only.' },
   { key: 'door', title: 'MG995 door policy', detail: 'MQ-2 only, 180° for 5 s (latest request). What happens after 5 s is unconfirmed; demo returns to 0°. Needs safety review before any real door.' },
   { key: 'gsm', title: 'SIM800C power and AT response reporting', detail: 'SIM800C is 2G-only. A Jio SIM will not register; use a 2G-capable network.' },
-  { key: 'hosting', title: 'Backend, hosting and authentication', detail: 'Phase 1 runs entirely in the browser with demo data.' },
+  { key: 'hosting', title: 'Where the ORION server runs', detail: 'LAN PC / Raspberry Pi or a cloud VPS. Simulation mode runs entirely in the browser.' },
   { key: 'recipients', title: 'Notification recipients', detail: 'None configured. Real alerts are disabled.' },
 ];
 

@@ -34,13 +34,8 @@
     { id: 'no_data', label: 'No data yet', group: 'App states', hint: 'Fresh install, nothing received.' },
   ];
 
-  const SERIES = {
-    mq2: { sensor: 'mq2-hall', label: 'MQ-2 (raw ADC)', unit: 'ADC', field: 'raw_adc', dp: 0 },
-    temp: { sensor: 'dht22-living', label: 'Temperature', unit: '°C', field: 'temperature_c', dp: 1 },
-    hum: { sensor: 'dht22-living', label: 'Humidity', unit: '%RH', field: 'humidity_percent', dp: 1 },
-    water: { sensor: 'water-utility', label: 'Water (raw ADC)', unit: 'ADC', field: 'raw_adc', dp: 0 },
-    flame: { sensor: 'flame-kitchen', label: 'Flame (detected)', unit: '0/1', field: 'detected', dp: 0 },
-  };
+  /* Which sensor produces each simulated metric (history arrays are kept per metric). */
+  const SIM_SENSOR = { mq2: 'mq2-hall', flame: 'flame-kitchen', water: 'water-utility', temp: 'dht22-living', hum: 'dht22-living' };
 
   /* Kerala-like diurnal pattern, peak mid-afternoon IST (≈08:30 UTC). */
   function diurnal(ms) {
@@ -51,7 +46,7 @@
   class DemoSource {
     constructor(seed) {
       this.kind = 'demo';
-      this.label = 'Demo simulation';
+      this.label = 'Simulation';
       this.seed = seed || 20261115;
       this.rand = U.mulberry32(this.seed + 7);
       this.scenario = 'normal';
@@ -66,7 +61,7 @@
       this.seqGaps = 0;
       this._buildHistory();
       this._initLive();
-      this._log('info', 'Demo source started (seed ' + this.seed + '). No hardware is connected.');
+      this._log('info', 'Simulation started (seed ' + this.seed + '). No hardware is connected — every value is simulated.');
     }
 
     /* ---------- history (deterministic) ---------- */
@@ -218,21 +213,21 @@
       const lastHum = this.hist.hum[this.hist.hum.length - 1];
       this.cur = { mq2: 175, temp: lastTemp ? lastTemp.v : 29, hum: lastHum ? lastHum.v : 72, water: 34, flame: 0 };
       this.sensors = {
-        'mq2-hall': { id: 'mq2-hall', type: 'mq2', label: 'MQ-2 smoke / gas', controller: 'esp32', unit: 'adc_raw', fields: { raw_adc: 175 }, state: 'normal', quality: 'valid', recorded_at: now, received_at: now, sequence: 0, calibration: 'uncalibrated_raw' },
-        'flame-kitchen': { id: 'flame-kitchen', type: 'flame', label: 'Flame sensor', controller: 'esp32', unit: 'digital', fields: { detected: false, digital_value: 1 }, state: 'normal', quality: 'valid', recorded_at: now, received_at: now, sequence: 0, polarity: 'active LOW (demo assumption)' },
-        'water-utility': { id: 'water-utility', type: 'water', label: 'Water sensor', controller: 'esp32', unit: 'adc_raw', fields: { raw_adc: 34, wet: false }, state: 'normal', quality: 'valid', recorded_at: now, received_at: now, sequence: 0 },
-        'dht22-living': { id: 'dht22-living', type: 'dht22', label: 'DHT22 temperature / humidity', controller: 'esp32', unit: 'c_rh', fields: { temperature_c: this.cur.temp, humidity_percent: this.cur.hum }, state: 'normal', quality: 'valid', recorded_at: now, received_at: now, sequence: 0 },
+        'mq2-hall': { id: 'mq2-hall', type: 'mq2', label: 'MQ-2 smoke / gas', controller: 'uno', simulated: true, unit: 'adc_raw', fields: { raw_adc: 175 }, state: 'normal', quality: 'valid', recorded_at: now, received_at: now, sequence: 0, calibration: 'uncalibrated_raw' },
+        'flame-kitchen': { id: 'flame-kitchen', type: 'flame', label: 'Flame sensor', controller: 'uno', simulated: true, unit: 'digital', fields: { detected: false, digital_value: 1 }, state: 'normal', quality: 'valid', recorded_at: now, received_at: now, sequence: 0, polarity: 'active LOW (demo assumption)' },
+        'water-utility': { id: 'water-utility', type: 'water', label: 'Water sensor', controller: 'uno', simulated: true, unit: 'adc_raw', fields: { raw_adc: 34, wet: false }, state: 'normal', quality: 'valid', recorded_at: now, received_at: now, sequence: 0 },
+        'dht22-living': { id: 'dht22-living', type: 'dht22', label: 'DHT22 temperature / humidity', controller: 'uno', simulated: true, unit: 'c_rh', fields: { temperature_c: this.cur.temp, humidity_percent: this.cur.hum }, state: 'normal', quality: 'valid', recorded_at: now, received_at: now, sequence: 0 },
       };
       this.controllers = {
-        uno: { id: 'orion-uno-01', name: 'Arduino UNO', role: 'Controller — role pending confirmation', online: true, last_seen_at: now, firmware_version: '0.1.0-demo', boot_reason: 'power_on', link: 'Serial to ESP32 (demo assumption)', logic: '5 V' },
-        esp32: { id: 'orion-esp32-01', name: 'ESP32', role: 'Gateway (demo assumption)', online: true, last_seen_at: now, firmware_version: '0.1.0-demo', boot_reason: 'power_on', wifi_rssi_dbm: -58, uptime_s: 5 * 3600 + 12 * 60, logic: '3.3 V (not 5 V tolerant)' },
+        uno: { id: 'orion-uno-01', name: 'Arduino UNO', role: 'Safety controller — reads sensors, drives outputs', is_gateway: false, simulated: true, online: true, last_seen_at: now, firmware_version: '0.1.0-sim', boot_reason: 'power_on', link: 'UART to ESP32 via level shifter', logic: '5 V' },
+        esp32: { id: 'orion-esp32-01', name: 'ESP32', role: 'Gateway — Wi-Fi/MQTT to server, SIM800C', is_gateway: true, simulated: true, online: true, last_seen_at: now, firmware_version: '0.1.0-sim', boot_reason: 'power_on', wifi_rssi_dbm: -58, uptime_s: 5 * 3600 + 12 * 60, logic: '3.3 V (not 5 V tolerant)' },
       };
-      this.gsm = { id: 'orion-sim800c-01', module: 'SIM800C', network_registered: true, operator: 'Demo 2G network', csq: 17, last_report_at: now, power: 'external supply (unconfirmed)' };
+      this.gsm = { id: 'orion-sim800c-01', module: 'SIM800C', simulated: true, network_registered: true, operator: 'Simulated 2G network', csq: 17, last_report_at: now, power: 'external supply (unconfirmed)' };
       this.fw = { smoke: false, smokeLevel: 'normal', flame: false, water: false, fanCooldownUntil: null, doorUntil: null, manualFan: null, buzzerTestUntil: null, normalSince: {} };
       this.act = {
         fan: { id: 'fan', name: '12 V exhaust fan', commanded: 'off', by: 'firmware', last_changed_at: now - 26 * HOUR, feedback: false },
-        relay: { id: 'relay', name: '5 V relay module', channels: [{ ch: 1, load: 'Exhaust fan (demo mapping, unverified)', commanded: 'de-energised' }], active_level: 'unverified', feedback: false },
-        mist: { id: 'mist', name: 'Mist maker', commanded: 'off', interlock: 'undefined', remote: 'disabled', feedback: false },
+        relay: { id: 'relay', name: '5 V relay module', channels: [{ ch: 1, load: 'Exhaust fan (planned mapping, unverified)', commanded: 'de-energised' }], active_level: 'unverified', feedback: false },
+        mist: { id: 'mist', name: 'Mist maker', installed: false, commanded: 'off', interlock: 'undefined', remote: 'disabled', feedback: false },
         mg995: { id: 'mg995', name: 'MG995 servo — model door', target_angle: 0, duration_s: null, command_time: now - 26 * HOUR, reported_position: null, feedback: false },
         sg90: { id: 'sg90', name: 'SG90 servo — purpose pending', target_angle: null, command_time: null, reported_position: null, feedback: false },
         buzzer: { id: 'buzzer', name: 'Buzzer', commanded: 'off', pattern: null, incident_id: null, feedback: false },
@@ -299,7 +294,8 @@
       /* --- simulated local firmware (runs even when the gateway is offline) --- */
       this._firmware(now);
 
-      /* --- telemetry reaching the backend --- */
+      /* --- telemetry reaching the backend ---
+         Sensors are read by the UNO and relayed by the ESP32, so both links must be up for fresh readings. */
       if (gatewayUp) {
         // occasional dropped packet → sequence gap (deterministic)
         if (this.tickN % 157 === 0) { this.seq.esp32++; this.seqGaps++; this._log('warn', 'Sequence gap detected on orion-esp32-01 (1 message missing)'); }
@@ -307,45 +303,47 @@
         const rec = now - 300 - Math.floor(r() * 500);
         const s = this.sensors;
         const fw = this.fwThresholds;
-        // MQ-2
-        const mqv = Math.round(U.clamp(this.cur.mq2, 0, 1023));
-        const warm = this.warmupUntil && now < this.warmupUntil;
-        if (this.warmupUntil && now >= this.warmupUntil) {
-          this.warmupUntil = null;
-          if (sc === 'mq2_warmup') { this.scenario = 'normal'; this._event('info', 'MQ-2 · Hall', 'MQ-2 warm-up complete'); }
-        }
-        Object.assign(s['mq2-hall'], {
-          fields: { raw_adc: mqv }, quality: warm ? 'warming_up' : 'valid',
-          warmup_remaining_s: warm ? Math.ceil((this.warmupUntil - now) / 1000) : 0,
-          state: warm ? 'unknown' : mqv >= fw.mq2_critical ? 'critical' : mqv >= fw.mq2_warning ? 'warning' : 'normal',
-          recorded_at: rec, received_at: recv, sequence: ++this.seq.esp32,
-          fw_threshold: { warning: fw.mq2_warning, critical: fw.mq2_critical },
-        });
-        this._push('mq2', rec, recv, warm ? null : mqv, warm ? 'warming_up' : 'valid');
-        // flame (active LOW demo assumption: digital 0 = detected)
-        Object.assign(s['flame-kitchen'], {
-          fields: { detected: !!flame, digital_value: flame ? 0 : 1 }, quality: 'valid',
-          state: flame ? 'critical' : 'normal', recorded_at: rec, received_at: recv, sequence: ++this.seq.esp32,
-        });
-        this._push('flame', rec, recv, flame, 'valid');
-        // water
-        const wv = Math.round(U.clamp(this.cur.water, 0, 1023));
-        const wet = wv >= fw.water_wet;
-        Object.assign(s['water-utility'], {
-          fields: { raw_adc: wv, wet }, quality: 'valid', state: wet ? 'warning' : 'normal',
-          recorded_at: rec, received_at: recv, sequence: ++this.seq.esp32, fw_threshold: { wet: fw.water_wet },
-        });
-        this._push('water', rec, recv, wv, 'valid');
-        // DHT22
-        if (sc === 'dht_fault') {
-          Object.assign(s['dht22-living'], { fields: { temperature_c: null, humidity_percent: null }, quality: 'fault', fault: 'read failure (checksum / timeout)', state: 'unknown', recorded_at: rec, received_at: recv, sequence: ++this.seq.esp32 });
-          if (this.tickN % 3 === 0) this._log('warn', 'dht22-living: read failure reported by controller');
-        } else if (sc !== 'dht_stale') {
-          const tv = +this.cur.temp.toFixed(1), hv = +U.clamp(this.cur.hum, 0, 100).toFixed(1);
-          Object.assign(s['dht22-living'], { fields: { temperature_c: tv, humidity_percent: hv }, quality: 'valid', fault: null, state: 'normal', recorded_at: rec, received_at: recv, sequence: ++this.seq.esp32 });
-          this._push('temp', rec, recv, tv, 'valid');
-          this._push('hum', rec, recv, hv, 'valid');
-        }
+        if (unoUp) {
+          // MQ-2
+          const mqv = Math.round(U.clamp(this.cur.mq2, 0, 1023));
+          const warm = this.warmupUntil && now < this.warmupUntil;
+          if (this.warmupUntil && now >= this.warmupUntil) {
+            this.warmupUntil = null;
+            if (sc === 'mq2_warmup') { this.scenario = 'normal'; this._event('info', 'MQ-2 · Hall', 'MQ-2 warm-up complete'); }
+          }
+          Object.assign(s['mq2-hall'], {
+            fields: { raw_adc: mqv }, quality: warm ? 'warming_up' : 'valid',
+            warmup_remaining_s: warm ? Math.ceil((this.warmupUntil - now) / 1000) : 0,
+            state: warm ? 'unknown' : mqv >= fw.mq2_critical ? 'critical' : mqv >= fw.mq2_warning ? 'warning' : 'normal',
+            recorded_at: rec, received_at: recv, sequence: ++this.seq.esp32,
+            fw_threshold: { warning: fw.mq2_warning, critical: fw.mq2_critical },
+          });
+          this._push('mq2', rec, recv, warm ? null : mqv, warm ? 'warming_up' : 'valid');
+          // flame (active LOW demo assumption: digital 0 = detected)
+          Object.assign(s['flame-kitchen'], {
+            fields: { detected: !!flame, digital_value: flame ? 0 : 1 }, quality: 'valid',
+            state: flame ? 'critical' : 'normal', recorded_at: rec, received_at: recv, sequence: ++this.seq.esp32,
+          });
+          this._push('flame', rec, recv, flame, 'valid');
+          // water
+          const wv = Math.round(U.clamp(this.cur.water, 0, 1023));
+          const wet = wv >= fw.water_wet;
+          Object.assign(s['water-utility'], {
+            fields: { raw_adc: wv, wet }, quality: 'valid', state: wet ? 'warning' : 'normal',
+            recorded_at: rec, received_at: recv, sequence: ++this.seq.esp32, fw_threshold: { wet: fw.water_wet },
+          });
+          this._push('water', rec, recv, wv, 'valid');
+          // DHT22
+          if (sc === 'dht_fault') {
+            Object.assign(s['dht22-living'], { fields: { temperature_c: null, humidity_percent: null }, quality: 'fault', fault: 'read failure (checksum / timeout)', state: 'unknown', recorded_at: rec, received_at: recv, sequence: ++this.seq.esp32 });
+            if (this.tickN % 3 === 0) this._log('warn', 'dht22-living: read failure reported by controller');
+          } else if (sc !== 'dht_stale') {
+            const tv = +this.cur.temp.toFixed(1), hv = +U.clamp(this.cur.hum, 0, 100).toFixed(1);
+            Object.assign(s['dht22-living'], { fields: { temperature_c: tv, humidity_percent: hv }, quality: 'valid', fault: null, state: 'normal', recorded_at: rec, received_at: recv, sequence: ++this.seq.esp32 });
+            this._push('temp', rec, recv, tv, 'valid');
+            this._push('hum', rec, recv, hv, 'valid');
+          }
+        } // unoUp
         // controllers
         this.controllers.esp32.online = true;
         this.controllers.esp32.last_seen_at = recv;
@@ -356,11 +354,11 @@
         this.gsmOutage = sc === 'gsm_outage';
         this.gsm.network_registered = !this.gsmOutage;
         this.gsm.csq = this.gsmOutage ? 99 : 15 + Math.round(r() * 4);
-        this.gsm.operator = this.gsmOutage ? null : 'Demo 2G network';
+        this.gsm.operator = this.gsmOutage ? null : 'Simulated 2G network';
         this.gsm.last_report_at = recv;
       }
       this._progressGsm(now);
-      this._progressCommands(now, gatewayUp);
+      this._progressCommands(now, gatewayUp && unoUp);
       this._incidentEngine(now);
       this._emit();
     }
@@ -463,9 +461,11 @@
       const hb = (ORION.app ? ORION.app.config.freshness.heartbeat_s : 20) * 1000;
       const CLEAR_HOLD = 10e3;
       const sensors = this.sensors;
+      const BASE = { mq2: 'MQ-2', flame: 'Flame sensor', water: 'Water sensor', dht22: 'DHT22' };
       const labelOf = (id) => {
-        const room = ORION.app ? ORION.app.config.rooms[id] : '';
-        const base = { 'mq2-hall': 'MQ-2', 'flame-kitchen': 'Flame sensor', 'water-utility': 'Water sensor', 'dht22-living': 'DHT22' }[id] || id;
+        const s = sensors[id];
+        const room = s && ORION.app ? ORION.registry.roomOf(ORION.app.config, s) : '';
+        const base = (s && BASE[s.type]) || id;
         return room ? `${base} · ${room}` : base;
       };
       const conds = [];
@@ -479,15 +479,18 @@
       if (!stale(wa) && wa.state === 'warning') conds.push({ key: 'water', type: 'water', source_id: wa.id, severity: 'warning', value: wa.fields.raw_adc, unit: 'adc_raw', threshold: `wet ≥ ${wa.fw_threshold ? wa.fw_threshold.wet : 300} (placeholder)` });
       // degraded conditions
       // When the gateway is down, report one root-cause incident instead of one per downstream sensor.
-      const gatewayDown = now - this.controllers.esp32.last_seen_at > hb;
+      const gw = Object.values(this.controllers).find((c) => c.is_gateway);
+      const gatewayDown = now - gw.last_seen_at > hb;
+      const ctrlDown = (k) => this.controllers[k] && now - this.controllers[k].last_seen_at > hb;
       for (const s of Object.values(sensors)) {
         if (gatewayDown) break;
+        if (stale(s) && ctrlDown(s.controller)) continue; // root cause is the controller, reported below
         if (stale(s)) conds.push({ key: 'stale:' + s.id, type: 'sensor_stale', source_id: s.id, severity: 'degraded', value: 'no readings', unit: '', threshold: `freshness ${fresh / 1000} s` });
         else if (s.quality === 'fault') conds.push({ key: 'fault:' + s.id, type: 'sensor_fault', source_id: s.id, severity: 'degraded', value: s.fault || 'fault', unit: '', threshold: 'quality = valid' });
       }
       for (const c of Object.values(this.controllers)) {
-        if (gatewayDown && c.id !== 'orion-esp32-01') continue;
-        if (now - c.last_seen_at > hb) conds.push({ key: 'hb:' + c.id, type: 'controller', source_id: c.id, severity: 'degraded', value: c.id === 'orion-esp32-01' && gatewayDown ? 'gateway heartbeat missing — all telemetry stale' : 'heartbeat missing', unit: '', threshold: `heartbeat ${hb / 1000} s`, label: c.name });
+        if (gatewayDown && c !== gw) continue;
+        if (now - c.last_seen_at > hb) conds.push({ key: 'hb:' + c.id, type: 'controller', source_id: c.id, severity: 'degraded', value: c === gw ? 'gateway heartbeat missing — all telemetry stale' : 'heartbeat missing — its sensors are stale', unit: '', threshold: `heartbeat ${hb / 1000} s`, label: c.name });
       }
       if (now - this.gsm.last_report_at <= hb && !this.gsm.network_registered) conds.push({ key: 'gsm', type: 'gsm', source_id: this.gsm.id, severity: 'degraded', value: 'not registered', unit: '', threshold: 'network registered', label: 'SIM800C GSM' });
 
@@ -574,7 +577,7 @@
       if (sc === 'backend_error') return { status: 'error', error: { code: 503, message: 'GET /api/v1/overview failed: 503 Service Unavailable (simulated)' }, at: Date.now() };
       if (sc === 'no_data') return { status: 'empty', at: Date.now() };
       return {
-        status: 'ok', mode: 'demo', at: Date.now(),
+        status: 'ok', mode: 'demo', simulated: true, at: Date.now(),
         sensors: this.sensors, controllers: this.controllers, gsm: this.gsm, gsmAttempts: this.gsmAttempts,
         actuators: this.act, incidents: this.incidents, events: this.events, commands: this.commands, logs: this.logs,
         fwThresholds: this.fwThresholds, fwState: { fanCooldownRemaining: this.act.fan.cooldown_remaining_s, smoke: this.fw.smoke, flame: this.fw.flame },
@@ -582,10 +585,12 @@
       };
     }
 
-    history(series, from, to) {
+    history(key, from, to) {
       if (this.scenario === 'no_data') return [];
+      const { sensorId, metric } = ORION.registry.parseSeries(key);
+      if (sensorId && SIM_SENSOR[metric] !== sensorId) return [];
       const out = [];
-      for (const arr of [this.hist[series], this.live[series]]) {
+      for (const arr of [this.hist[metric], this.live[metric]]) {
         if (!arr) continue;
         for (const p of arr) if (p.t >= from && p.t <= to) out.push(p);
       }
@@ -611,7 +616,7 @@
       this.commands.unshift(cmd);
       this._log('info', `audit: command.create ${cmd.id} ${actuator}:${action} by ${actor}`);
       this._emit();
-      return cmd;
+      return { ok: true, command: cmd };
     }
 
     _progressCommands(now, gatewayUp) {
@@ -650,9 +655,9 @@
     snapshot() { return { status: 'unconfigured', message: 'No ORION backend is configured. Live telemetry arrives in Phase 2 (backend + ESP32 gateway).' }; }
     history() { return []; }
     acknowledge() { return { ok: false, error: 'No backend configured' }; }
-    command() { return null; }
+    command() { return { ok: false, error: 'No backend configured — the command was not sent.' }; }
     setScenario() {}
   }
 
-  ORION.sources = { DemoSource, LiveSource, SCENARIOS, SERIES };
+  ORION.sources = { DemoSource, LiveSource, SCENARIOS, SIM_SENSOR };
 })();

@@ -72,7 +72,7 @@
   }
 
   const chip = (cls, text, ic) => `<span class="chip-s s-${cls}">${ic ? icon(ic) : '<i class="d"></i>'}${esc(text)}</span>`;
-  const demoTag = () => '<span class="tag-demo">demo</span>';
+  const demoTag = () => '<span class="tag-demo" title="Simulated value — not from hardware">simulated</span>';
 
   function statePanel(kind, title, body, extra) {
     const ic = { loading: 'clock', empty: 'info', error: 'x', unconfigured: 'off' }[kind] || 'info';
@@ -83,7 +83,8 @@
     if (!ev || ev.system === 'LOADING') return skeleton(n);
     if (ev.backendError) return statePanel('error', 'Can’t load data', 'The ORION server returned an error. Nothing is shown rather than guessing.', ORION.app.lastOkAt ? `<div class="sp-x">Last good update: ${esc(F.dt(ORION.app.lastOkAt))}</div>` : '');
     if (ev.noData) return statePanel('empty', 'No data yet', 'Nothing has been received from the home yet. Readings appear here once the ESP32 starts sending.');
-    if (ev.unconfigured) return statePanel('unconfigured', 'Live data not connected yet', 'A live backend arrives in Phase 2. Switch to demo to explore ORION.', '<div class="sp-x"><button class="btn sm" data-action="mode" data-mode="demo">Use demo data</button></div>');
+    if (ev.needsAuth) return statePanel('unconfigured', 'Sign in to ORION', 'Live data is only shown to signed-in users.', '<div class="sp-x"><button class="btn sm" data-action="login-open">Sign in</button></div>');
+    if (ev.unconfigured) return statePanel('unconfigured', 'Live data not connected yet', 'No ORION server is configured. Simulation mode lets you explore ORION with invented data.', '<div class="sp-x"><button class="btn sm" data-action="mode" data-mode="demo">Use simulation</button></div>');
     return null;
   }
   function kv(rows) {

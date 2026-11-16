@@ -50,14 +50,57 @@
         document.addEventListener('keydown', unlock, { once: true, capture: true });
       }
     };
-    if (!window.claude || typeof window.claude.use !== 'function') { fallbackVoice(); cap.ready = true; emit(); return; }
+    cap.host = window.claude && typeof window.claude.use === 'function' ? 'claude' : 'browser';
+    if (cap.host !== 'claude') { cap.dict = browserDictation(); fallbackVoice(); cap.ready = true; emit(); return; }
     const get = (n) => Promise.resolve().then(() => window.claude.use(n)).catch(() => null);
     const [s, t, d] = await Promise.all([get('sample'), get('tts'), get('dictation')]);
-    cap.sample = s; cap.tts = t; cap.dict = d;
+    cap.sample = s; cap.tts = t; cap.dict = d || browserDictation();
     if (t && typeof t.languages === 'function') cap.ttsLangs = await t.languages().catch(() => undefined);
     if (s && typeof s.limits === 'function') { const lim = await s.limits().catch(() => null); cap.tools = !!(lim && lim.tools); }
     fallbackVoice();
     cap.ready = true; emit();
+  }
+
+  /* Browser speech recognition (Web Speech API), exposing the same interface Aura's voice code already uses:
+     start({language}) / stop() / active() / onPartial / onFinal / onState({state, reason}).
+     Chrome and Edge send the audio to their vendor's speech service; availability and languages depend on the browser. */
+  function browserDictation() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return null;
+    let rec = null, on = false, stopping = false;
+    const L = { partial: [], final: [], state: [] };
+    const fire = (k, v) => L[k].forEach((f) => { try { f(v); } catch (e) { console.error(e); } });
+    const ERR = { 'not-allowed': 'not_granted', 'service-not-allowed': 'not_granted', 'language-not-supported': 'unavailable', 'audio-capture': 'unavailable', 'no-speech': 'stopped', aborted: 'stopped', network: 'upstream_error' };
+    return {
+      kind: 'browser',
+      active: () => on,
+      onPartial: (f) => L.partial.push(f), onFinal: (f) => L.final.push(f), onState: (f) => L.state.push(f),
+      start(opts) {
+        return new Promise((resolve, reject) => {
+          if (on) return resolve();
+          let started = false, reason = 'stopped';
+          try {
+            rec = new SR(); rec.continuous = true; rec.interimResults = true;
+            const code = opts && opts.language;
+            rec.lang = (code && BCP[code]) || navigator.language || 'en-IN';
+          } catch (e) { reject({ code: 'unavailable' }); return; }
+          rec.onstart = () => { started = true; on = true; fire('state', { state: 'listening' }); resolve(); };
+          rec.onresult = (e) => {
+            let interim = '';
+            for (let i = e.resultIndex; i < e.results.length; i++) {
+              const r = e.results[i], txt = (r[0] && r[0].transcript) || '';
+              if (r.isFinal) fire('final', { text: txt.trim() + ' ' }); else interim += txt;
+            }
+            fire('partial', { text: interim.trim() });
+          };
+          rec.onerror = (e) => { reason = ERR[e.error] || 'upstream_error'; if (!started) reject({ code: reason }); };
+          rec.onend = () => { on = false; rec = null; fire('state', { state: 'idle', reason: stopping ? 'stopped' : reason }); stopping = false; };
+          fire('state', { state: 'starting' });
+          try { rec.start(); } catch (e) { reject({ code: 'upstream_error' }); }
+        });
+      },
+      stop() { stopping = true; try { if (rec) rec.stop(); } catch (e) { /* already stopped */ } return Promise.resolve(); },
+    };
   }
 
   /* Device (browser) voice — used only where Claude's own voice isn't offered in this view. */
@@ -137,14 +180,17 @@
   function context(app) {
     const snap = app.snap, ev = app.ev, cfg = app.config, now = Date.now();
     if (!snap || snap.status !== 'ok') return { data_status: snap ? snap.status : 'loading', note: ev && ev.reasons ? ev.reasons.join(' ') : 'No data available.' };
-    const S = snap.sensors;
+    const R = ORION.registry;
     const fresh = (id) => {
       const st = ev.sensors[id];
-      return st.status === 'live' ? 'fresh' : st.status === 'stale' ? `STALE — no reading for ${Math.round(st.age / 1000)} s (last-known value)` : st.status;
+      if (!st) return 'unknown';
+      return st.status === 'live' ? 'fresh' : st.status === 'stale' ? (st.age === Infinity ? 'NO READING RECEIVED' : `STALE — no reading for ${Math.round(st.age / 1000)} s (last-known value)`) : st.status;
     };
-    const room = (id) => cfg.rooms[id] || '';
-    const stats = (series, conv) => {
-      const pts = app.source.history(series, now - 86400e3, now).filter((p) => p.v != null);
+    const room = (s) => R.roomOf(cfg, s);
+    const stats = (metric, conv) => {
+      const key = R.seriesForMetric(snap, metric);
+      if (!key) return 'no sensor';
+      const pts = (app.source.history(key, now - 86400e3, now) || []).filter((p) => p.v != null);
       if (!pts.length) return 'no data';
       let mn = Infinity, mx = -Infinity, sum = 0;
       for (const p of pts) { mn = Math.min(mn, p.v); mx = Math.max(mx, p.v); sum += p.v; }
@@ -152,8 +198,7 @@
       return { min: +c(mn).toFixed(1), max: +c(mx).toFixed(1), avg: +c(sum / pts.length).toFixed(1) };
     };
     const tC = cfg.tempUnit === 'F' ? (c) => c * 9 / 5 + 32 : (c) => c;
-    const d = S['dht22-living'];
-    const A = snap.actuators;
+    const A = snap.actuators || null;
     const incs = snap.incidents.slice().sort((a, b) => b.opened_at - a.opened_at);
     const incOut = (i) => ({
       what: ORION.ui.incidentSentence(i), severity: i.severity, state: i.state === 'cleared' ? 'resolved' : 'ACTIVE',
@@ -163,23 +208,26 @@
     });
     return {
       now: F.dt(now), timezone: cfg.timezone, home: cfg.home.name,
-      data_source: app.mode === 'demo' ? 'DEMO SIMULATION — not real hardware readings' : 'live',
+      data_source: app.mode === 'demo' ? 'SIMULATION — invented test data, not real hardware readings' : 'live hardware telemetry',
       overall_state: ev.system, state_reasons: ev.reasons, also: ev.notes,
-      sensors: {
-        smoke_gas_MQ2: { room: room('mq2-hall'), raw_adc: S['mq2-hall'].fields.raw_adc, note: 'raw ADC count, NOT ppm, uncalibrated', device_state: S['mq2-hall'].state, quality: S['mq2-hall'].quality, firmware_thresholds: S['mq2-hall'].fw_threshold, freshness: fresh('mq2-hall'), recorded: F.dt(S['mq2-hall'].recorded_at) },
-        flame: { room: room('flame-kitchen'), detected: S['flame-kitchen'].fields.detected, freshness: fresh('flame-kitchen'), recorded: F.dt(S['flame-kitchen'].recorded_at), note: 'polarity unverified' },
-        water: { room: room('water-utility'), wet: S['water-utility'].fields.wet, raw_adc: S['water-utility'].fields.raw_adc, freshness: fresh('water-utility'), recorded: F.dt(S['water-utility'].recorded_at), note: 'cannot estimate leak volume' },
-        temperature_humidity_DHT22: { room: room('dht22-living'), temperature: d.fields.temperature_c == null ? 'no valid reading' : `${F.temp(d.fields.temperature_c)} ${F.tempUnit()}`, humidity: d.fields.humidity_percent == null ? 'no valid reading' : `${d.fields.humidity_percent} %RH`, quality: d.quality, fault: d.fault || null, freshness: fresh('dht22-living'), recorded: F.dt(d.recorded_at), advisory_thresholds: 'not set' },
-      },
+      sensors: R.sensorList(snap).map((s) => {
+        const f = s.fields || {};
+        const base = { id: s.id, type: s.type, room: room(s), freshness: fresh(s.id), quality: s.quality, recorded: s.recorded_at == null ? 'never' : F.dt(s.recorded_at), simulated: !!s.simulated };
+        if (s.type === 'mq2') return Object.assign(base, { raw_adc: f.raw_adc, note: 'raw ADC count, NOT ppm, uncalibrated', device_state: s.state, firmware_thresholds: s.fw_threshold || 'not reported' });
+        if (s.type === 'flame') return Object.assign(base, { detected: f.detected, note: 'polarity unverified' });
+        if (s.type === 'water') return Object.assign(base, { wet: f.wet, raw_adc: f.raw_adc, note: 'cannot estimate leak volume' });
+        if (s.type === 'dht22') return Object.assign(base, { temperature: f.temperature_c == null ? 'no valid reading' : `${F.temp(f.temperature_c)} ${F.tempUnit()}`, humidity: f.humidity_percent == null ? 'no valid reading' : `${f.humidity_percent} %RH`, fault: s.fault || null, advisory_thresholds: 'not set' });
+        return Object.assign(base, { fields: f });
+      }),
       last_24h: { smoke_raw: stats('mq2'), temperature: stats('temp', tC), humidity_pct: stats('hum'), water_raw: stats('water') },
-      controllers: Object.values(snap.controllers).map((c) => ({ name: c.name, online: ev.controllers[c.id === 'orion-uno-01' ? 'uno' : 'esp32'].online, last_seen: F.ago(c.last_seen_at, now), firmware: c.firmware_version, role: c.role })),
-      gsm_SIM800C: { status_reported: ev.gsm.reported, network_registered: ev.gsm.registered, signal_csq: snap.gsm.csq, recent_attempts: snap.gsmAttempts.slice(0, 4).map((a) => `${a.type.toUpperCase()} ${a.status} at ${F.dt(a.updated_at)} (${a.note})`), note: '"sent" = modem accepted, delivery not confirmed' },
-      outputs_as_commanded_no_feedback: {
+      controllers: Object.entries(snap.controllers || {}).map(([k, c]) => ({ name: c.name, online: ev.controllers[k].online, gateway: !!c.is_gateway, last_seen: c.last_seen_at == null ? 'never' : F.ago(c.last_seen_at, now), firmware: c.firmware_version, role: c.role })),
+      gsm_SIM800C: snap.gsm ? { status_reported: ev.gsm.reported, network_registered: ev.gsm.registered, signal_csq: snap.gsm.csq, recent_attempts: (snap.gsmAttempts || []).slice(0, 4).map((a) => `${a.type.toUpperCase()} ${a.status} at ${F.dt(a.updated_at)} (${a.note})`), note: '"sent" = modem accepted, delivery not confirmed' } : 'not registered with ORION',
+      outputs_as_commanded_no_feedback: A && A.fan ? {
         exhaust_fan: A.fan.commanded + (A.fan.cooldown_remaining_s ? ` (cooldown ${A.fan.cooldown_remaining_s}s left)` : ''),
         buzzer: A.buzzer.commanded, model_door_servo_MG995: `target ${A.mg995.target_angle}° (position not sensed)`,
-        mist_maker: 'disabled — purpose undefined', SG90_servo: 'disabled — purpose undefined',
+        mist_maker: 'not installed (placeholder only)', SG90_servo: 'disabled — purpose undefined',
         leds: A.leds.items.map((l) => `${l.name.split(' — ')[0]} ${l.commanded}`).join(', '),
-      },
+      } : 'no outputs reported',
       active_incidents: incs.filter((i) => i.state !== 'cleared').map(incOut),
       recent_incidents: incs.filter((i) => i.state === 'cleared').slice(0, 5).map(incOut),
       undecided_by_owner: ORION.pending.map((p) => p.title),
@@ -195,7 +243,7 @@
   }
   const CORE = [
     'You are Aura, the calm, friendly assistant inside ORION, a prototype smart-home safety system built by a student on a model house (Arduino UNO + ESP32, MQ-2 smoke/gas, flame, water and DHT22 temperature/humidity sensors, exhaust fan, buzzer, LEDs, servo door, SIM800C GSM for SMS/calls). You work like a careful AI assistant: understand what the person really needs, check the data, then answer clearly.',
-    'TRUTH: For anything about this home, rely only on ORION data (given below or returned by your tools). Never invent or estimate readings, calibration, sensor health, SMS delivery or whether a device physically did something. If a value is STALE, missing or faulty, say so plainly. When the data source is a DEMO SIMULATION, mention that briefly when you report readings.',
+    'TRUTH: For anything about this home, rely only on ORION data (given below or returned by your tools). Never invent or estimate readings, calibration, sensor health, SMS delivery or whether a device physically did something. If a value is STALE, missing or faulty, say so plainly. When the data source is a SIMULATION, say so whenever you report readings — simulated values are not measurements.',
     'FACTS vs OPINION: When you report readings or events, put up to 3 short fact lines first, each starting with "• " and including the value and its time (and "stale" if stale). Then a blank line, then your explanation or advice. For greetings, thanks or general questions, skip the fact lines.',
     'LIMITS: You cannot switch devices, change thresholds, silence alarms or open doors yourself. ORION is a prototype, not a certified fire alarm or gas detector — never claim the home is "safe"; say what the sensors report.',
     'EMERGENCY: If the user says there is a real fire, smoke, gas leak or danger, FIRST tell them to get everyone out and call 112 (emergency) or 101 (fire) in India. Do not tell them to wait for ORION.',
@@ -206,19 +254,12 @@
   function pageContext(app) {
     const u = app.ui, names = { home: 'Home', history: 'History', alerts: 'Alerts', devices: 'Devices', aura: 'Aura chat', config: 'Settings' };
     let s = `The user is currently on the ${names[app.route] || app.route} page`;
-    if (app.route === 'history') s += ` (${u.histSeries}, last ${u.histRange})`;
+    if (app.route === 'history') { const si = ORION.registry.seriesInfo(u.histSeries); s += ` (${si ? si.name : 'no sensor'}, last ${u.histRange})`; }
     return s + '.';
   }
 
-  /* Short summary for tool mode (tools fetch the rest). */
-  function brief(app) {
-    const snap = app.snap, ev = app.ev;
-    if (!snap || snap.status !== 'ok') return { data_status: snap ? snap.status : 'loading', note: ev && ev.reasons ? ev.reasons.join(' ') : '' };
-    const c = context(app);
-    return { now: c.now, data_source: c.data_source, overall_state: c.overall_state, state_reasons: c.state_reasons, active_alerts: c.active_incidents.map((i) => i.what), home: c.home };
-  }
 
-  const SENSOR_SERIES = { smoke: 'mq2', flame: 'flame', water: 'water', temperature: 'temp', humidity: 'hum' };
+  const SENSOR_SERIES = { smoke: 'mq2', flame: 'flame', water: 'water', temperature: 'temp', humidity: 'hum' }; // Aura name → metric
   function tools(app, step) {
     const need = () => { if (!app.snap || app.snap.status !== 'ok') throw new Error('ORION data unavailable: ' + (app.ev && app.ev.reasons ? app.ev.reasons.join(' ') : 'no data')); };
     return [
@@ -228,21 +269,22 @@
         inputSchema: { type: 'object', properties: { sensor: { type: 'string', enum: Object.keys(SENSOR_SERIES) }, hours: { type: 'number', description: '1 to 168' } }, required: ['sensor'] },
         execute(i) {
           need();
-          const key = String(i.sensor || ''), series = SENSOR_SERIES[key]; if (!series) throw new Error('Unknown sensor ' + key);
+          const key = String(i.sensor || ''), metric = SENSOR_SERIES[key]; if (!metric) throw new Error('Unknown sensor ' + key);
+          const series = ORION.registry.seriesForMetric(app.snap, metric); if (!series) return { sensor: key, note: 'no such sensor is registered' };
           const hours = Math.max(1, Math.min(168, Number(i.hours) || 24));
           step('history', `Looked at ${key} history · ${hours >= 24 ? Math.round(hours / 24) + ' day' + (hours >= 48 ? 's' : '') : hours + ' h'}`);
           const to = Date.now(), from = to - hours * 3600e3;
-          let pts = app.source.history(series, from, to).filter((p) => p.v != null);
-          const conv = series === 'temp' && app.config.tempUnit === 'F' ? (v) => v * 9 / 5 + 32 : (v) => v;
+          let pts = (app.source.history(series, from, to) || []).filter((p) => p.v != null);
+          const conv = metric === 'temp' && app.config.tempUnit === 'F' ? (v) => v * 9 / 5 + 32 : (v) => v;
           if (!pts.length) return { sensor: key, hours, note: 'no readings stored in this window' };
           let mn = Infinity, mx = -Infinity, sum = 0, tmx = 0, tmn = 0;
           for (const p of pts) { const v = conv(p.v); if (v > mx) { mx = v; tmx = p.t; } if (v < mn) { mn = v; tmn = p.t; } sum += v; }
           const N = 36, w = (to - from) / N, buckets = [];
           for (let b = 0; b < N; b++) { const a = from + b * w, z = a + w; const ch = pts.filter((p) => p.t >= a && p.t < z); buckets.push({ time: F.dt(a + w / 2), value: ch.length ? +(ch.reduce((s, p) => s + conv(p.v), 0) / ch.length).toFixed(1) : null }); }
           const gaps = buckets.filter((b) => b.value == null).length;
-          const unit = series === 'temp' ? F.tempUnit() : series === 'hum' ? '%RH' : series === 'flame' ? '1 = flame detected' : 'raw ADC (not ppm)';
-          const alerts = app.snap.incidents.filter((x) => x.source_id === ORION.sources.SERIES[series].sensor && x.opened_at >= from).map((x) => ({ what: ORION.ui.incidentSentence(x), severity: x.severity, opened: F.dt(x.opened_at), resolved: x.cleared_at ? F.dt(x.cleared_at) : 'still active' }));
-          return { sensor: key, unit, window: `${F.dt(from)} → ${F.dt(to)}`, data_source: app.mode === 'demo' ? 'DEMO simulation' : 'live', max: { value: +mx.toFixed(1), at: F.dt(tmx) }, min: { value: +mn.toFixed(1), at: F.dt(tmn) }, average: +(sum / pts.length).toFixed(1), points: buckets, buckets_with_no_data: gaps, alerts };
+          const unit = metric === 'temp' ? F.tempUnit() : metric === 'hum' ? '%RH' : metric === 'flame' ? '1 = flame detected' : 'raw ADC (not ppm)';
+          const alerts = app.snap.incidents.filter((x) => x.source_id === ORION.registry.parseSeries(series).sensorId && x.opened_at >= from).map((x) => ({ what: ORION.ui.incidentSentence(x), severity: x.severity, opened: F.dt(x.opened_at), resolved: x.cleared_at ? F.dt(x.cleared_at) : 'still active' }));
+          return { sensor: key, unit, window: `${F.dt(from)} → ${F.dt(to)}`, data_source: app.mode === 'demo' ? 'SIMULATION' : 'live', max: { value: +mx.toFixed(1), at: F.dt(tmx) }, min: { value: +mn.toFixed(1), at: F.dt(tmn) }, average: +(sum / pts.length).toFixed(1), points: buckets, buckets_with_no_data: gaps, alerts };
         } },
       { name: 'get_alerts', description: 'Alert records: what happened, severity, start/end times, sensor reading, what the devices reported doing (with outcomes), and whether the owner marked it as seen. filter "active" or "recent".',
         inputSchema: { type: 'object', properties: { filter: { type: 'string', enum: ['active', 'recent'] }, limit: { type: 'number' } } },
@@ -256,14 +298,14 @@
         execute() {
           need(); step('devices', 'Checked devices, texts and calls');
           const c = context(app), snap = app.snap;
-          return { outputs: c.outputs_as_commanded_no_feedback, recent_commands: snap.commands.slice(0, 5).map((x) => `${x.actuator} ${x.action}: ${x.status} (${x.history[x.history.length - 1].note})`), gsm: c.gsm_SIM800C, boards: c.controllers };
+          return { outputs: c.outputs_as_commanded_no_feedback, recent_commands: (snap.commands || []).slice(0, 5).map((x) => `${x.actuator} ${x.action}: ${x.status} (${x.history[x.history.length - 1].note})`), gsm: c.gsm_SIM800C, boards: c.controllers };
         } },
       { name: 'open_page', description: 'Show the user a page of the ORION app. page: home, history, alerts, devices or settings. For history you may pick sensor and range (1h, 6h, 24h, 7d).',
         inputSchema: { type: 'object', properties: { page: { type: 'string', enum: ['home', 'history', 'alerts', 'devices', 'settings'] }, sensor: { type: 'string', enum: Object.keys(SENSOR_SERIES) }, range: { type: 'string', enum: ['1h', '6h', '24h', '7d'] } }, required: ['page'] },
         execute(i) {
           const page = String(i.page), map = { settings: 'config' };
           if (!['home', 'history', 'alerts', 'devices', 'settings'].includes(page)) throw new Error('Unknown page');
-          if (page === 'history') { if (SENSOR_SERIES[i.sensor]) app.ui.histSeries = SENSOR_SERIES[i.sensor]; if (['1h', '6h', '24h', '7d'].includes(i.range)) app.ui.histRange = i.range; }
+          if (page === 'history') { if (SENSOR_SERIES[i.sensor]) app.ui.histSeries = ORION.registry.seriesForMetric(app.snap, SENSOR_SERIES[i.sensor]) || app.ui.histSeries; if (['1h', '6h', '24h', '7d'].includes(i.range)) app.ui.histRange = i.range; }
           step('open', `Opened ${page}${page === 'history' && i.sensor ? ' · ' + i.sensor : ''}`);
           app.go(map[page] || page);
           return 'The page is now shown to the user.';
@@ -301,10 +343,10 @@
   function split(text) {
     const lines = String(text || '').split('\n');
     const facts = [], rest = [];
-    for (const l of lines) { if (/^\s*[•\-\*]\s+/.test(l) && !rest.join('').trim()) facts.push(l.replace(/^\s*[•\-\*]\s+/, '')); else rest.push(l); }
+    for (const l of lines) { if (/^\s*[•\-*]\s+/.test(l) && !rest.join('').trim()) facts.push(l.replace(/^\s*[•\-*]\s+/, '')); else rest.push(l); }
     return { facts, body: rest.join('\n').trim() };
   }
-  const plainForSpeech = (text) => String(text).replace(/^\s*[•\-\*]\s+/gm, '').replace(/[*_#`]/g, '').replace(/\n{2,}/g, '\n').trim();
+  const plainForSpeech = (text) => String(text).replace(/^\s*[•\-*]\s+/gm, '').replace(/[*_#`]/g, '').replace(/\n{2,}/g, '\n').trim();
 
   const ERR = {
     not_granted: 'Aura needs your permission to use Claude. Basic mode is on for now.',
