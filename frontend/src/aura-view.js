@@ -11,7 +11,7 @@
   let ctl = null, dictBase = '', dictWired = false, ttsWired = false;
   const el = (id) => document.getElementById(id);
   const lang = () => AI.byCode(ui().auraLang);
-  const aiOn = () => !!AI.cap.sample && !AI.cap.aiBlocked;
+  const aiOn = () => (!!AI.cap.sample && !AI.cap.aiBlocked) || AI.serverOn(A());
 
   /* Conversations live only for this visit — nothing old is carried over (like a fresh voice session). */
   function save() { /* intentionally not persisted */ }
@@ -48,7 +48,7 @@
   }
   function footNote() {
     const L = lang(), notes = [];
-    if (AI.cap.ready && !aiOn()) notes.push('Aura’s AI isn’t connected here, so it answers in basic English from ORION data. Full conversation needs the ORION server’s Aura service.');
+    if (AI.cap.ready && !aiOn()) notes.push(A().mode === 'live' && A().source.aura && A().source.aura.reason ? 'Aura’s AI is off on this server (' + A().source.aura.reason + ') — basic English answers from ORION data.' : 'Aura’s AI isn’t connected here, so it answers in basic English from ORION data. Full conversation needs the ORION server’s Aura service.');
     else if (L.tier === 'other') notes.push(`${L.name} isn’t in Anthropic’s published language benchmark — double-check important answers.`);
     if (AI.cap.ready && !AI.speechAvailable()) notes.push(AI.PLATFORM.android ? 'The Claude Android app can’t play voices from web pages — Aura answers in text here. For voice, open ORION in Chrome.' : 'Voice replies aren’t available in this app — Aura answers in text.');
     if (ui().auraSpeak && AI.speechAvailable() && !AI.canSpeak(L.code)) notes.push(`Spoken replies aren’t available in ${L.name} here — text only.`);
@@ -117,7 +117,7 @@
     const idx = u.auraMsgs.length - 1;
     renderLog();
     const inp = el('au-in'); if (inp) inp.value = '';
-    if (!AI.cap.ready) { msg.steps.push({ kind: 'status', text: 'Connecting to Claude…' }); renderMsg(idx); await AI.ready; msg.steps = []; }
+    if (!AI.cap.ready) { msg.steps.push({ kind: 'status', text: 'Connecting…' }); renderMsg(idx); await AI.ready; msg.steps = []; }
     if (!aiOn()) return basic(msg, idx, text);
     msg.mode = 'ai';
     await run(msg, idx, true);
@@ -650,7 +650,7 @@
     'aura-copy': (t) => { const m = ui().auraMsgs[+t.dataset.i]; try { navigator.clipboard.writeText(AI.plainForSpeech(m.text)).then(() => A().toast('Copied.'), () => A().toast('Copy isn’t allowed here.')); } catch (e) { A().toast('Copy isn’t allowed here.'); } },
     'aura-retry': (t) => { const i = +t.dataset.i, m = ui().auraMsgs[i]; if (!m || ctl) return; m.status = 'thinking'; m.text = ''; m.steps = []; m.err = null; renderMsg(i); run(m, i, true); },
     'aura-speak': () => { const u = ui(); u.auraSpeak = !u.auraSpeak; u.auraSpeakSet = true; if (!u.auraSpeak && AI.cap.tts) AI.cap.tts.stop().catch(() => {}); U.store.set('orion.aura.speak', u.auraSpeak); renderChrome(); },
-    'aura-clear': () => { if (ctl) ctl.abort(); ui().auraMsgs = []; renderLog(); },
+    'aura-clear': () => { if (ctl) ctl.abort(); ui().auraMsgs = []; ui().auraConv = null; renderLog(); },
     'aura-lang': () => A().sheet('lang', langSheet),
     'aura-status': () => A().sheet('status', statusSheet, true),
     'voice-open': () => { const was = V.open; voiceOpen(); if (!was && AI.cap.ready) orbTap(); },

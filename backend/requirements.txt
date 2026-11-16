@@ -10,3 +10,4 @@ pydantic-settings==2.16.3
 argon2-cffi==25.1.0
 pyjwt==2.15.1
 aiomqtt==2.5.1
+anthropic==2.8.0

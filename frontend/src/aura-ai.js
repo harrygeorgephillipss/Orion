@@ -325,7 +325,32 @@
     ];
   }
 
+  /* Aura on the ORION server (Phase 4): the provider, its key, the tools and the permission checks all live on the
+     server; this page only streams the answer. */
+  const serverOn = (app) => !!(app && app.mode === 'live' && app.source && app.source.aura && app.source.aura.available && !cap.serverBlocked);
+  async function askServer(app, turns, langCode, opts) {
+    const last = turns[turns.length - 1];
+    const body = { message: String(last && last.content || ''), conversation_id: app.ui.auraConv || null, language: langCode || 'auto', voice: !!opts.voice, page: app.route };
+    let full = '', err = null;
+    await app.source.auraChat(body, (e) => {
+      if (e.type === 'safety') { full = e.text + '\n\n' + full; opts.onText && opts.onText({ text: full }); }
+      else if (e.type === 'text') { full += e.delta; opts.onText && opts.onText({ text: full }); }
+      else if (e.type === 'step') { opts.onStep && opts.onStep(STEP_KIND[e.kind] || 'status', e.text); }
+      else if (e.type === 'action' && e.kind === 'open_page') {
+        if (e.page === 'history') { const m = { smoke: 'mq2', flame: 'flame', water: 'water', temperature: 'temp', humidity: 'hum' }[e.sensor]; if (m) app.ui.histSeries = ORION.registry.seriesForMetric(app.snap, m) || app.ui.histSeries; if (e.range) app.ui.histRange = e.range; }
+        app.go({ settings: 'config' }[e.page] || e.page);
+      } else if (e.type === 'action' && e.kind === 'proposal') { app.confirmProposal(e); }
+      else if (e.type === 'done') { app.ui.auraConv = e.conversation_id; if (e.text && !full) full = e.text; }
+      else if (e.type === 'unavailable') { app.ui.auraConv = e.conversation_id; err = { code: 'capability_disabled', text: full }; cap.serverBlocked = true; }
+      else if (e.type === 'error') { err = { code: e.code === 'rate_limited' ? 'rate_limited' : e.code === 'refused' ? 'refused' : 'upstream_error', text: full }; }
+    }, opts.signal);
+    if (err && !full.trim()) throw err;
+    return { text: full, truncated: !!(err && err.code === 'truncated') };
+  }
+  const STEP_KIND = { get_system_status: 'status', get_sensor_readings: 'status', get_sensor_history: 'history', get_alerts: 'alerts', get_incident_history: 'alerts', get_device_status: 'devices', get_gsm_status: 'devices', get_controller_health: 'devices', open_dashboard_page: 'open', propose_device_command: 'propose' };
+
   async function ask(app, turns, langCode, opts) {
+    if (serverOn(app)) return askServer(app, turns, langCode, opts);
     const useTools = cap.tools && opts.tools !== false;
     const VOICE_RULE = 'VOICE CONVERSATION: The user is talking to you out loud and will hear your reply spoken. Answer in 1–3 short, natural spoken sentences, like a calm voice assistant. Do NOT use "• " fact lines or lists; mention the reading time and that it is demo data briefly in the sentence. Keep emergency advice first if relevant.';
     const head = [CORE[0], `LANGUAGE: ${langRule(langCode)}`].concat(CORE.slice(1), useTools ? [TOOLS_RULE] : [], opts.voice ? [VOICE_RULE] : [], [pageContext(app)]).join('\n\n');
@@ -363,5 +388,5 @@
 
     /* Device voice usable alongside Claude's mic (Claude's own voice can't speak while its mic is on). */
   const deviceVoiceFor = (code) => { if (typeof window.speechSynthesis === 'undefined') return null; return browserVoiceFor(code); };
-  ORION.auraAI = { deviceSay, deviceVoiceFor, PLATFORM, LANGS, byCode, cap, init, onChange: (f) => subs.push(f), canSpeak, speechAvailable, speakBrowser, stopBrowser, browserVoiceFor, detectLang, context, ask, split, plainForSpeech, ERR };
+  ORION.auraAI = { serverOn, notify: emit, deviceSay, deviceVoiceFor, PLATFORM, LANGS, byCode, cap, init, onChange: (f) => subs.push(f), canSpeak, speechAvailable, speakBrowser, stopBrowser, browserVoiceFor, detectLang, context, ask, split, plainForSpeech, ERR };
 })();

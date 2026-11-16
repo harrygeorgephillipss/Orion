@@ -62,8 +62,38 @@
       await this._afterAuth();
     }
     async _afterAuth() {
-      await Promise.all([this._loadConfig(), this.refetch()]);
+      await Promise.all([this._loadConfig(), this.refetch(), this._loadAura()]);
       this._openWs();
+    }
+    async _loadAura() {
+      const r = await this.api('/aura/status');
+      this.aura = r.ok ? r.data : { available: false, reason: r.error };
+      if (ORION.auraAI && ORION.auraAI.notify) ORION.auraAI.notify();
+    }
+
+    /* Aura on the ORION server: POST /aura/chat streams Server-Sent Events (safety, step, text, action, done, error). */
+    async auraChat(body, onEvent, signal) {
+      const go = () => fetch(this.base + '/api/v1/aura/chat', { method: 'POST', credentials: 'include', signal, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.token }, body: JSON.stringify(body) });
+      let r;
+      try {
+        r = await go();
+        if (r.status === 401 && await this._refresh()) r = await go();
+      } catch (e) { throw { code: e && e.name === 'AbortError' ? 'cancelled' : 'upstream_error' }; }
+      if (!r.ok) throw { code: r.status === 429 ? 'rate_limited' : r.status === 401 ? 'session_expired' : 'upstream_error' };
+      const reader = r.body.getReader(), dec = new TextDecoder();
+      let buf = '';
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let i;
+          while ((i = buf.indexOf('\n\n')) >= 0) {
+            const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+            if (chunk.startsWith('data: ')) { try { onEvent(JSON.parse(chunk.slice(6))); } catch (e) { console.error(e); } }
+          }
+        }
+      } catch (e) { throw { code: e && e.name === 'AbortError' ? 'cancelled' : 'upstream_error' }; }
     }
 
     /* ---------- auth ---------- */

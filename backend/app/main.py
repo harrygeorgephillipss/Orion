@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import func, select
 
 from . import mqtt
-from .api import auth, data, devices, system, users, ws
+from .api import aura, auth, data, devices, system, users, ws
 from .audit import audit
 from .bus import bus
 from .config import get_settings
@@ -97,7 +97,7 @@ def create_app() -> FastAPI:
         log.exception("unhandled error on %s", request.url.path)
         return JSONResponse({"detail": "Internal server error"}, status_code=500)
 
-    for r in (auth.router, users.router, devices.router, data.router, system.router, ws.router):
+    for r in (auth.router, users.router, devices.router, data.router, system.router, aura.router, ws.router):
         app.include_router(r, prefix="/api/v1")
 
     # Serve the built single-file web app on the same origin (cookies + no CORS needed).

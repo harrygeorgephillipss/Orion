@@ -281,3 +281,60 @@ class NotificationContact(Base):
     call: Mapped[bool] = mapped_column(Boolean, default=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(TS, default=utcnow)
+
+
+# ---------------- Aura (Phase 4) ----------------
+class AuraConversation(Base):
+    """One chat thread. Conversation memory is per user and pruned after a retention period."""
+
+    __tablename__ = "aura_conversations"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("conv"))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(120), default="")
+    created_at: Mapped[datetime] = mapped_column(TS, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(TS, default=utcnow, index=True)
+
+
+class AuraMessage(Base):
+    __tablename__ = "aura_messages"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[str] = mapped_column(ForeignKey("aura_conversations.id", ondelete="CASCADE"), index=True)
+    role: Mapped[str] = mapped_column(String(16))  # user | assistant
+    text: Mapped[str] = mapped_column(Text)
+    meta: Mapped[dict] = mapped_column(JSON, default=dict)  # tool steps, mode (ai/basic), language
+    at: Mapped[datetime] = mapped_column(TS, default=utcnow)
+
+
+class AuraProposal(Base):
+    """A device command Aura suggested. Nothing runs until the same user confirms it in the app."""
+
+    __tablename__ = "aura_proposals"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("prop"))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    actuator: Mapped[str] = mapped_column(String(32))
+    action: Mapped[str] = mapped_column(String(32))
+    reason: Mapped[str] = mapped_column(String(300), default="")
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending | confirmed | declined | expired
+    command_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TS, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(TS)
+
+
+class UserPreference(Base):
+    """Settings the user chooses (language, voice). Aura can read them but has no tool to change them."""
+
+    __tablename__ = "user_preferences"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(TS, default=utcnow)
+
+
+class PushToken(Base):
+    """A phone registered for push notifications (Phase 5)."""
+
+    __tablename__ = "push_tokens"
+    token: Mapped[str] = mapped_column(String(300), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    platform: Mapped[str] = mapped_column(String(16), default="android")
+    created_at: Mapped[datetime] = mapped_column(TS, default=utcnow)
+    last_error: Mapped[str | None] = mapped_column(String(200), nullable=True)

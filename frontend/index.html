@@ -1407,8 +1407,38 @@ ORION.fmt = (function () {
       await this._afterAuth();
     }
     async _afterAuth() {
-      await Promise.all([this._loadConfig(), this.refetch()]);
+      await Promise.all([this._loadConfig(), this.refetch(), this._loadAura()]);
       this._openWs();
+    }
+    async _loadAura() {
+      const r = await this.api('/aura/status');
+      this.aura = r.ok ? r.data : { available: false, reason: r.error };
+      if (ORION.auraAI && ORION.auraAI.notify) ORION.auraAI.notify();
+    }
+
+    /* Aura on the ORION server: POST /aura/chat streams Server-Sent Events (safety, step, text, action, done, error). */
+    async auraChat(body, onEvent, signal) {
+      const go = () => fetch(this.base + '/api/v1/aura/chat', { method: 'POST', credentials: 'include', signal, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.token }, body: JSON.stringify(body) });
+      let r;
+      try {
+        r = await go();
+        if (r.status === 401 && await this._refresh()) r = await go();
+      } catch (e) { throw { code: e && e.name === 'AbortError' ? 'cancelled' : 'upstream_error' }; }
+      if (!r.ok) throw { code: r.status === 429 ? 'rate_limited' : r.status === 401 ? 'session_expired' : 'upstream_error' };
+      const reader = r.body.getReader(), dec = new TextDecoder();
+      let buf = '';
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let i;
+          while ((i = buf.indexOf('\n\n')) >= 0) {
+            const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+            if (chunk.startsWith('data: ')) { try { onEvent(JSON.parse(chunk.slice(6))); } catch (e) { console.error(e); } }
+          }
+        }
+      } catch (e) { throw { code: e && e.name === 'AbortError' ? 'cancelled' : 'upstream_error' }; }
     }
 
     /* ---------- auth ---------- */
@@ -2405,7 +2435,32 @@ ORION.fmt = (function () {
     ];
   }
 
+  /* Aura on the ORION server (Phase 4): the provider, its key, the tools and the permission checks all live on the
+     server; this page only streams the answer. */
+  const serverOn = (app) => !!(app && app.mode === 'live' && app.source && app.source.aura && app.source.aura.available && !cap.serverBlocked);
+  async function askServer(app, turns, langCode, opts) {
+    const last = turns[turns.length - 1];
+    const body = { message: String(last && last.content || ''), conversation_id: app.ui.auraConv || null, language: langCode || 'auto', voice: !!opts.voice, page: app.route };
+    let full = '', err = null;
+    await app.source.auraChat(body, (e) => {
+      if (e.type === 'safety') { full = e.text + '\n\n' + full; opts.onText && opts.onText({ text: full }); }
+      else if (e.type === 'text') { full += e.delta; opts.onText && opts.onText({ text: full }); }
+      else if (e.type === 'step') { opts.onStep && opts.onStep(STEP_KIND[e.kind] || 'status', e.text); }
+      else if (e.type === 'action' && e.kind === 'open_page') {
+        if (e.page === 'history') { const m = { smoke: 'mq2', flame: 'flame', water: 'water', temperature: 'temp', humidity: 'hum' }[e.sensor]; if (m) app.ui.histSeries = ORION.registry.seriesForMetric(app.snap, m) || app.ui.histSeries; if (e.range) app.ui.histRange = e.range; }
+        app.go({ settings: 'config' }[e.page] || e.page);
+      } else if (e.type === 'action' && e.kind === 'proposal') { app.confirmProposal(e); }
+      else if (e.type === 'done') { app.ui.auraConv = e.conversation_id; if (e.text && !full) full = e.text; }
+      else if (e.type === 'unavailable') { app.ui.auraConv = e.conversation_id; err = { code: 'capability_disabled', text: full }; cap.serverBlocked = true; }
+      else if (e.type === 'error') { err = { code: e.code === 'rate_limited' ? 'rate_limited' : e.code === 'refused' ? 'refused' : 'upstream_error', text: full }; }
+    }, opts.signal);
+    if (err && !full.trim()) throw err;
+    return { text: full, truncated: !!(err && err.code === 'truncated') };
+  }
+  const STEP_KIND = { get_system_status: 'status', get_sensor_readings: 'status', get_sensor_history: 'history', get_alerts: 'alerts', get_incident_history: 'alerts', get_device_status: 'devices', get_gsm_status: 'devices', get_controller_health: 'devices', open_dashboard_page: 'open', propose_device_command: 'propose' };
+
   async function ask(app, turns, langCode, opts) {
+    if (serverOn(app)) return askServer(app, turns, langCode, opts);
     const useTools = cap.tools && opts.tools !== false;
     const VOICE_RULE = 'VOICE CONVERSATION: The user is talking to you out loud and will hear your reply spoken. Answer in 1–3 short, natural spoken sentences, like a calm voice assistant. Do NOT use "• " fact lines or lists; mention the reading time and that it is demo data briefly in the sentence. Keep emergency advice first if relevant.';
     const head = [CORE[0], `LANGUAGE: ${langRule(langCode)}`].concat(CORE.slice(1), useTools ? [TOOLS_RULE] : [], opts.voice ? [VOICE_RULE] : [], [pageContext(app)]).join('\n\n');
@@ -2443,7 +2498,7 @@ ORION.fmt = (function () {
 
     /* Device voice usable alongside Claude's mic (Claude's own voice can't speak while its mic is on). */
   const deviceVoiceFor = (code) => { if (typeof window.speechSynthesis === 'undefined') return null; return browserVoiceFor(code); };
-  ORION.auraAI = { deviceSay, deviceVoiceFor, PLATFORM, LANGS, byCode, cap, init, onChange: (f) => subs.push(f), canSpeak, speechAvailable, speakBrowser, stopBrowser, browserVoiceFor, detectLang, context, ask, split, plainForSpeech, ERR };
+  ORION.auraAI = { serverOn, notify: emit, deviceSay, deviceVoiceFor, PLATFORM, LANGS, byCode, cap, init, onChange: (f) => subs.push(f), canSpeak, speechAvailable, speakBrowser, stopBrowser, browserVoiceFor, detectLang, context, ask, split, plainForSpeech, ERR };
 })();
 
 /* Aura chat — mounts either as the Aura page or as the side panel available on every page.
@@ -2459,7 +2514,7 @@ ORION.fmt = (function () {
   let ctl = null, dictBase = '', dictWired = false, ttsWired = false;
   const el = (id) => document.getElementById(id);
   const lang = () => AI.byCode(ui().auraLang);
-  const aiOn = () => !!AI.cap.sample && !AI.cap.aiBlocked;
+  const aiOn = () => (!!AI.cap.sample && !AI.cap.aiBlocked) || AI.serverOn(A());
 
   /* Conversations live only for this visit — nothing old is carried over (like a fresh voice session). */
   function save() { /* intentionally not persisted */ }
@@ -2496,7 +2551,7 @@ ORION.fmt = (function () {
   }
   function footNote() {
     const L = lang(), notes = [];
-    if (AI.cap.ready && !aiOn()) notes.push('Aura’s AI isn’t connected here, so it answers in basic English from ORION data. Full conversation needs the ORION server’s Aura service.');
+    if (AI.cap.ready && !aiOn()) notes.push(A().mode === 'live' && A().source.aura && A().source.aura.reason ? 'Aura’s AI is off on this server (' + A().source.aura.reason + ') — basic English answers from ORION data.' : 'Aura’s AI isn’t connected here, so it answers in basic English from ORION data. Full conversation needs the ORION server’s Aura service.');
     else if (L.tier === 'other') notes.push(`${L.name} isn’t in Anthropic’s published language benchmark — double-check important answers.`);
     if (AI.cap.ready && !AI.speechAvailable()) notes.push(AI.PLATFORM.android ? 'The Claude Android app can’t play voices from web pages — Aura answers in text here. For voice, open ORION in Chrome.' : 'Voice replies aren’t available in this app — Aura answers in text.');
     if (ui().auraSpeak && AI.speechAvailable() && !AI.canSpeak(L.code)) notes.push(`Spoken replies aren’t available in ${L.name} here — text only.`);
@@ -2565,7 +2620,7 @@ ORION.fmt = (function () {
     const idx = u.auraMsgs.length - 1;
     renderLog();
     const inp = el('au-in'); if (inp) inp.value = '';
-    if (!AI.cap.ready) { msg.steps.push({ kind: 'status', text: 'Connecting to Claude…' }); renderMsg(idx); await AI.ready; msg.steps = []; }
+    if (!AI.cap.ready) { msg.steps.push({ kind: 'status', text: 'Connecting…' }); renderMsg(idx); await AI.ready; msg.steps = []; }
     if (!aiOn()) return basic(msg, idx, text);
     msg.mode = 'ai';
     await run(msg, idx, true);
@@ -3098,7 +3153,7 @@ ORION.fmt = (function () {
     'aura-copy': (t) => { const m = ui().auraMsgs[+t.dataset.i]; try { navigator.clipboard.writeText(AI.plainForSpeech(m.text)).then(() => A().toast('Copied.'), () => A().toast('Copy isn’t allowed here.')); } catch (e) { A().toast('Copy isn’t allowed here.'); } },
     'aura-retry': (t) => { const i = +t.dataset.i, m = ui().auraMsgs[i]; if (!m || ctl) return; m.status = 'thinking'; m.text = ''; m.steps = []; m.err = null; renderMsg(i); run(m, i, true); },
     'aura-speak': () => { const u = ui(); u.auraSpeak = !u.auraSpeak; u.auraSpeakSet = true; if (!u.auraSpeak && AI.cap.tts) AI.cap.tts.stop().catch(() => {}); U.store.set('orion.aura.speak', u.auraSpeak); renderChrome(); },
-    'aura-clear': () => { if (ctl) ctl.abort(); ui().auraMsgs = []; renderLog(); },
+    'aura-clear': () => { if (ctl) ctl.abort(); ui().auraMsgs = []; ui().auraConv = null; renderLog(); },
     'aura-lang': () => A().sheet('lang', langSheet),
     'aura-status': () => A().sheet('status', statusSheet, true),
     'voice-open': () => { const was = V.open; voiceOpen(); if (!was && AI.cap.ready) orbTap(); },
@@ -3772,6 +3827,20 @@ ORION.fmt = (function () {
     openModal(`<h2 id="md-t">${esc(title)}</h2>${body}`, { actions: `<button class="btn ghost" data-action="md-cancel">Cancel</button><button class="btn ${danger ? 'danger' : ''}" id="md-ok">${esc(confirm)}</button>`, focus: '#md-ok' });
     document.getElementById('md-ok').onclick = () => { closeModal(); onConfirm(); };
   }
+  /* Aura suggested a device command: nothing runs unless the person confirms here. */
+  app.confirmProposal = function (p) {
+    confirmBox({
+      title: 'Aura suggests: ' + p.actuator + ' ' + p.action, confirm: 'Send command',
+      body: `<p>${esc(p.description || '')}</p>${p.reason ? `<p class="hint">${esc(p.reason)}</p>` : ''}<p class="hint">Nothing happens unless you press “Send command”. The controller may still refuse it.</p>`,
+      onConfirm() {
+        app.source.api('/aura/proposals/' + encodeURIComponent(p.id) + '/confirm', { method: 'POST' }).then((r) => {
+          app.toast(r.ok ? (r.data.status === 'failed' ? 'Command not sent: ' + r.data.history[r.data.history.length - 1].note : 'Command queued. Follow its steps on Devices.') : 'Command not sent: ' + r.error, r.ok && r.data.status !== 'failed' ? '' : 'bad');
+          if (app.source.refetch) app.source.refetch();
+        });
+      },
+    });
+  };
+
   /* Sign-in dialog (live mode). The password is sent only to the ORION server, over HTTPS in production. */
   function loginBox() {
     if (app.mode !== 'live' || !app.source.login) return;

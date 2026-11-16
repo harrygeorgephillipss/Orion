@@ -186,6 +186,20 @@
     openModal(`<h2 id="md-t">${esc(title)}</h2>${body}`, { actions: `<button class="btn ghost" data-action="md-cancel">Cancel</button><button class="btn ${danger ? 'danger' : ''}" id="md-ok">${esc(confirm)}</button>`, focus: '#md-ok' });
     document.getElementById('md-ok').onclick = () => { closeModal(); onConfirm(); };
   }
+  /* Aura suggested a device command: nothing runs unless the person confirms here. */
+  app.confirmProposal = function (p) {
+    confirmBox({
+      title: 'Aura suggests: ' + p.actuator + ' ' + p.action, confirm: 'Send command',
+      body: `<p>${esc(p.description || '')}</p>${p.reason ? `<p class="hint">${esc(p.reason)}</p>` : ''}<p class="hint">Nothing happens unless you press “Send command”. The controller may still refuse it.</p>`,
+      onConfirm() {
+        app.source.api('/aura/proposals/' + encodeURIComponent(p.id) + '/confirm', { method: 'POST' }).then((r) => {
+          app.toast(r.ok ? (r.data.status === 'failed' ? 'Command not sent: ' + r.data.history[r.data.history.length - 1].note : 'Command queued. Follow its steps on Devices.') : 'Command not sent: ' + r.error, r.ok && r.data.status !== 'failed' ? '' : 'bad');
+          if (app.source.refetch) app.source.refetch();
+        });
+      },
+    });
+  };
+
   /* Sign-in dialog (live mode). The password is sent only to the ORION server, over HTTPS in production. */
   function loginBox() {
     if (app.mode !== 'live' || !app.source.login) return;

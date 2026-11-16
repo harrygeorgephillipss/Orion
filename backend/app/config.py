@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="ORION_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="ORION_", env_file=".env", extra="ignore", populate_by_name=True)
 
     env: str = "development"
     secret_key: str = Field(default="", description="JWT signing key; required")
@@ -35,6 +35,19 @@ class Settings(BaseSettings):
     clear_hold_s: float = 10.0
     login_max_failures: int = 5
     login_lock_s: int = 300
+
+    # ---- Aura (Phase 4). The API key itself is read by the Anthropic SDK from ANTHROPIC_API_KEY. ----
+    aura_provider: str = Field(default="", alias="AURA_PROVIDER")  # anthropic | mock | "" (off → basic mode)
+    aura_model: str = Field(default="", alias="AURA_MODEL")  # Anthropic model ID chosen by the owner
+    aura_effort: str = Field(default="", alias="AURA_EFFORT")  # low | medium | high … ("" = model default)
+    aura_refusal_fallback: str = Field(default="", alias="AURA_REFUSAL_FALLBACK")  # "default" enables server-side fallback
+    aura_max_tool_rounds: int = Field(default=6, alias="AURA_MAX_TOOL_ROUNDS")
+    aura_history_turns: int = Field(default=10, alias="AURA_HISTORY_TURNS")
+    aura_retention_days: int = Field(default=30, alias="AURA_RETENTION_DAYS")
+
+    # ---- Push notifications (Phase 5) ----
+    fcm_project_id: str = Field(default="", alias="FCM_PROJECT_ID")
+    fcm_service_account_file: str = Field(default="", alias="FCM_SERVICE_ACCOUNT_FILE")
 
     @field_validator("secret_key")
     @classmethod
