@@ -31,8 +31,10 @@ Run the tests: `make -C hardware/lib/OrionCore/test`.
 
 - **UNO** `src/main.cpp`: `FLAME_ACTIVE_LOW`, `RELAY_ACTIVE_LOW`, `HAS_FLAME_AO` — measure your modules first.
   Thresholds and timings: `OrionCore/src/orion_config.h` (placeholders until calibrated — [CALIBRATION.md](CALIBRATION.md)).
-- **ESP32**: `cp include/secrets.example.h include/secrets.h`, fill in Wi-Fi, broker address, the gateway id/password
-  from registration, controller/sensor ids exactly as registered, and emergency numbers. `secrets.h` is git-ignored.
+- **ESP32**: nothing to edit. On first boot (or after holding BOOT 5 s) it opens Wi-Fi **ORION-Setup-XXXX**
+  (password `orion-setup`) with a setup page for home Wi-Fi + the app's setup code; both are stored in flash. The
+  setup code is decoded by `OrionCore/src/orion_setup.cpp` (tested against the app's encoder). `secrets.h` remains an
+  optional development fallback. SMS alerts and the UNO link keep running while in setup mode.
 
 ## Flashing
 

@@ -130,3 +130,14 @@ ORION.fmt = (function () {
     tempUnit() { return ((ORION.app && ORION.app.config.tempUnit) || 'C') === 'F' ? '°F' : '°C'; },
   };
 })();
+
+/* ---------- ESP32 setup code (decoded by hardware/lib/OrionCore/src/orion_setup.cpp) ---------- */
+ORION.setupCode = {
+  encode(c) {
+    const f = ['ORION1', c.host, String(c.port || 1883), c.home, c.gateway, c.password, c.controller, c.gsm || '', c.mq2, c.flame, c.water, c.dht];
+    if (f.some((x) => x == null || String(x).includes('|'))) throw new Error('setup code fields must not be empty or contain "|"');
+    const bytes = new TextEncoder().encode(f.join('|'));
+    let bin = ''; bytes.forEach((b) => { bin += String.fromCharCode(b); });
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  },
+};

@@ -597,6 +597,17 @@ ORION.fmt = (function () {
   };
 })();
 
+/* ---------- ESP32 setup code (decoded by hardware/lib/OrionCore/src/orion_setup.cpp) ---------- */
+ORION.setupCode = {
+  encode(c) {
+    const f = ['ORION1', c.host, String(c.port || 1883), c.home, c.gateway, c.password, c.controller, c.gsm || '', c.mq2, c.flame, c.water, c.dht];
+    if (f.some((x) => x == null || String(x).includes('|'))) throw new Error('setup code fields must not be empty or contain "|"');
+    const bytes = new TextEncoder().encode(f.join('|'));
+    let bin = ''; bytes.forEach((b) => { bin += String.fromCharCode(b); });
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  },
+};
+
 /* ORION native bridge — active only inside the Android app (Capacitor). In a browser this file does nothing.
  *
  *  - Sign-in: the app uses the "mobile" login flow; the refresh token is kept in app-private storage
@@ -3390,9 +3401,9 @@ ORION.fmt = (function () {
     if (devs && devs.ok) {
       const d = devs.data;
       h += `<section class="card" data-sec="devices"><h2>Registered devices</h2>
-        ${d.devices.length ? wrapTbl(`<table class="tbl"><thead><tr><th>Device</th><th>Type</th><th>Last seen</th><th>Data</th>${u.role === 'owner' ? '<th></th>' : ''}</tr></thead><tbody>${d.devices.map((x) => `<tr><td>${esc(x.name)} <span class="hint mono">${esc(x.id)}</span></td><td>${x.is_gateway ? 'Gateway (ESP32)' : 'Controller (UNO)'}</td><td>${x.last_seen_at ? esc(F.ago(x.last_seen_at)) : 'never'}</td><td>${x.simulated ? '<span class="tag-demo">simulated</span>' : 'hardware'}</td>${u.role === 'owner' && x.is_gateway ? `<td><button class="btn sm ghost" data-la="del-device" data-id="${esc(x.id)}" type="button">Remove</button></td>` : u.role === 'owner' ? '<td></td>' : ''}</tr>`).join('')}</tbody></table>`) + `<p class="hint">${d.sensors.length} sensors: ${d.sensors.map((s) => esc(s.label + (s.room ? ' · ' + s.room : ''))).join(', ')}</p>` : '<p class="hint">No devices yet. Register your ESP32 gateway below.</p>'}
+        ${d.devices.length ? wrapTbl(`<table class="tbl"><thead><tr><th>Device</th><th>Type</th><th>Last seen</th><th>Data</th>${admin ? '<th></th>' : ''}</tr></thead><tbody>${d.devices.map((x) => `<tr><td>${esc(x.name)} <span class="hint mono">${esc(x.id)}</span></td><td>${x.is_gateway ? 'Gateway (ESP32)' : 'Controller (UNO)'}</td><td>${x.last_seen_at ? esc(F.ago(x.last_seen_at)) : 'never'}</td><td>${x.simulated ? '<span class="tag-demo">simulated</span>' : 'hardware'}</td>${admin ? `<td style="white-space:nowrap">${x.is_gateway ? `<button class="btn sm ghost" data-la="rotate" data-id="${esc(x.id)}" type="button">New setup code</button>` : ''}${u.role === 'owner' && x.is_gateway ? ` <button class="btn sm ghost" data-la="del-device" data-id="${esc(x.id)}" type="button">Remove</button>` : ''}</td>` : ''}</tr>`).join('')}</tbody></table>`) + `<p class="hint">${d.sensors.length} sensors: ${d.sensors.map((s) => esc(s.label + (s.room ? ' · ' + s.room : ''))).join(', ')}</p>` : '<p class="hint">No devices yet. Register your ESP32 gateway below.</p>'}
         ${admin ? `<details class="more"${d.devices.length ? '' : ' open'}><summary>Register a gateway</summary>
-          <p class="hint">Use the same ids in the ESP32's <span class="mono">secrets.h</span>. The broker password is shown once.</p>
+          <p class="hint">Registering gives you a setup code for the ESP32 — no code editing needed. Keep the suggested ids unless you have more than one home.</p>
           <form data-la="register" class="fgrid" autocomplete="off">
             ${[['gw', 'Gateway id (ESP32)', 'esp32-01'], ['ctrl', 'Controller id (UNO)', 'uno-01'], ['gsm', 'GSM module id', 'gsm-01'], ['mq2', 'MQ-2 sensor id', 'mq2-01'], ['mq2room', 'MQ-2 room', 'Hall'], ['flame', 'Flame sensor id', 'flame-01'], ['flameroom', 'Flame room', 'Kitchen'], ['water', 'Water sensor id', 'water-01'], ['waterroom', 'Water room', 'Utility area'], ['dht', 'DHT22 id', 'dht-01'], ['dhtroom', 'DHT22 room', 'Living room']]
               .map(([n, l, v]) => `<label class="fld"><span>${l}</span><input name="${n}" value="${v}" maxlength="63" required></label>`).join('')}
@@ -3406,6 +3417,35 @@ ORION.fmt = (function () {
         ${wrapTbl(`<table class="tbl"><thead><tr><th>When</th><th>Who</th><th>What</th><th>Target</th></tr></thead><tbody>${audit.data.map((a) => `<tr><td class="mono">${esc(F.dt(a.at))}</td><td>${esc(a.actor_type)}</td><td class="mono">${esc(a.action)}</td><td class="mono">${esc(a.target)}</td></tr>`).join('')}</tbody></table>`)}</details></section>`;
     }
     root.innerHTML = h;
+  }
+
+
+  /* Setup code for the ESP32 (decoded by the gateway's setup page; see docs/USER_GUIDE.md). */
+  function serverHost() {
+    try { const h = new URL(A().source.base).hostname; return h; } catch (e) { return ''; }
+  }
+  function showSetup(root, data, verb) {
+    const out = root.querySelector('[data-la-out="register"]');
+    if (!out) return;
+    out.closest('details').open = true;
+    const st = data.setup, host = serverHost();
+    const local = /^(localhost|127\.|::1)/.test(host);
+    out.innerHTML = `<div class="note stack" role="status" style="gap:8px"><b>${esc(verb)} ${esc(st.gateway)}.</b>
+      <span class="hint">${data.broker_account_created ? 'Its broker account is ready.' : 'Add its broker account (docs/BACKEND.md) if you run Mosquitto yourself.'} The setup code contains its password — it is shown only now.</span>
+      <div class="fgrid"><label class="fld"><span>Server address the gateway uses</span><input data-sc="host" value="${esc(local ? '' : host)}" placeholder="e.g. 192.168.1.10" maxlength="63"><small>${local ? 'This page is opened on the server itself — enter the server’s address on your home network.' : 'The address of this ORION server on your home network.'}</small></label>
+        <label class="fld"><span>Broker port</span><input data-sc="port" type="number" value="${esc(st.mqtt_port)}" min="1" max="65535"></label></div>
+      <label class="fld"><span>Setup code</span><textarea data-secret data-sc="code" rows="3" readonly class="mono" style="width:100%"></textarea></label>
+      <div class="row-btns"><button class="btn sm" data-la="copy" type="button">Copy setup code</button></div>
+      <ol class="hint" style="margin:0;padding-left:18px"><li>Power the ESP32. A new Wi-Fi network <b>ORION-Setup-…</b> appears (password <span class="mono">orion-setup</span>).</li>
+        <li>Join it with your phone; the setup page opens (or go to <span class="mono">192.168.4.1</span>).</li>
+        <li>Enter your home Wi-Fi name and password, paste the setup code, tap <b>Save and connect</b>. The gateway shows as online here within a minute.</li></ol>
+      <span class="hint">Already set up before? Hold the ESP32’s BOOT button for 5 seconds to open its setup page again.</span></div>`;
+    const upd = () => {
+      const code = out.querySelector('[data-sc="code"]'), h = out.querySelector('[data-sc="host"]').value.trim(), port = +out.querySelector('[data-sc="port"]').value || 1883;
+      try { code.value = h ? ORION.setupCode.encode(Object.assign({}, st, { host: h, port })) : 'Enter the server address above'; } catch (e) { code.value = 'Invalid: ' + e.message; }
+    };
+    out.querySelectorAll('[data-sc="host"],[data-sc="port"]').forEach((i) => i.addEventListener('input', upd));
+    upd();
   }
 
   const fd = (f) => Object.fromEntries(new FormData(f).entries());
@@ -3443,15 +3483,8 @@ ORION.fmt = (function () {
         .map(([k, type, label]) => ({ id: v[k].trim(), type, label, room: (v[k + 'room'] || '').trim() }));
       r = await api('/devices/gateways', { method: 'POST', body: { id: v.gw.trim(), name: v.sim ? 'ESP32 (simulator)' : 'ESP32', simulated: !!v.sim, gsm_module_id: v.gsm.trim(), controllers: [{ id: v.ctrl.trim(), name: v.sim ? 'Arduino UNO (simulator)' : 'Arduino UNO', sensors }] } });
       if (!r.ok) return msg(f, r.error, true);
-      const m = r.data.mqtt;
       await render(root);
-      const out = root.querySelector('[data-la-out="register"]');
-      if (out) {
-        out.closest('details').open = true;
-        out.innerHTML = `<div class="note" role="status"><b>Registered ${esc(r.data.gateway_id)}.</b> Copy the broker password now — it is not shown again.
-          ${C.kv([['MQTT username', m.username], ['MQTT password', `<span class="mono" data-secret>${esc(m.password)}</span> <button class="btn sm ghost" data-la="copy" type="button">Copy</button>`, true]])}
-          <p class="hint">${r.data.broker_account_created ? 'The broker account was created automatically. Next: put this password in the ESP32’s <span class="mono">secrets.h</span> as MQTT_PASSWORD and flash it.' : `Next: add it to the broker (<span class="mono">python3 scripts/mqtt_passwd.py deployment/mosquitto/passwd ${esc(m.username)}</span>, then restart the broker) and put it in the ESP32’s <span class="mono">secrets.h</span> as MQTT_PASSWORD.`}</p></div>`;
-      }
+      showSetup(root, r.data, 'Registered');
       if (A().source.refetch) A().source.refetch();
     }
   }
@@ -3478,9 +3511,17 @@ ORION.fmt = (function () {
       if (A().source.refetch) A().source.refetch();
       return render(root);
     }
+    if (kind === 'rotate') {
+      if (!window.confirm(`Create a new setup code for ${b.dataset.id}? Its current password stops working, so the gateway must be set up again with the new code.`)) return;
+      const r = await api('/devices/' + encodeURIComponent(b.dataset.id) + '/rotate-secret', { method: 'POST' });
+      if (!r.ok) { A().toast('Not done: ' + r.error, 'bad'); return; }
+      await render(root);
+      showSetup(root, r.data, 'New setup code for');
+      return;
+    }
     if (kind === 'copy') {
       const t = root.querySelector('[data-secret]');
-      try { await navigator.clipboard.writeText(t.textContent); A().toast('Copied.'); } catch (err) { const r = document.createRange(); r.selectNodeContents(t); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); A().toast('Select and copy the password.'); }
+      try { await navigator.clipboard.writeText(t.value || t.textContent); A().toast('Copied.'); } catch (err) { const r = document.createRange(); r.selectNodeContents(t); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); A().toast('Select and copy the password.'); }
     }
   }
 

@@ -17,7 +17,7 @@ function load(files, opts) {
   const ctx = {
     console, Math, JSON, Intl, Promise, Set, Map, Object, Array, String, Number, Boolean, Symbol, Error, RegExp, isFinite, parseFloat,
     setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
-    Date: FakeDate,
+    Date: FakeDate, TextEncoder, btoa: (s) => Buffer.from(s, 'binary').toString('base64'),
     localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) },
     navigator: { userAgent: 'node', language: 'en-IN' },
   };

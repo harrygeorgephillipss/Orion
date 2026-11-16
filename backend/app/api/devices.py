@@ -92,11 +92,36 @@ async def register_gateway(body: GatewayIn, request: Request, actor: User = Depe
     await db.commit()
     root = st.mqtt_topic_root
     added = broker_users.upsert(gw.id, secret)
-    return {
+    return await _setup_info(db, gw, secret) | {
         "gateway_id": gw.id, "home_id": st.home_id, "simulated": body.simulated, "broker_account_created": added,
         # Shown ONCE. Configure it on the broker (scripts/mqtt_passwd.py) and in the gateway firmware.
         "mqtt": {"username": gw.id, "password": secret, "publish": f"{root}/{st.home_id}/{gw.id}/+", "subscribe": f"{root}/{st.home_id}/{gw.id}/cmd"},
     }
+
+
+async def _setup_info(db: AsyncSession, gw: Device, secret: str) -> dict:
+    """Everything the app needs to build the ESP32 setup code (docs/USER_GUIDE.md)."""
+    ctrls = list((await db.execute(select(Device).where(Device.parent_id == gw.id))).scalars())
+    ctrl = ctrls[0] if ctrls else None
+    sens = list((await db.execute(select(Sensor).where(Sensor.device_id == ctrl.id))).scalars()) if ctrl else []
+    gsm = (await db.execute(select(GsmModule).where(GsmModule.gateway_id == gw.id))).scalars().first()
+    by_type = {s.type: s.id for s in sens}
+    return {"setup": {"home": gw.home_id, "gateway": gw.id, "password": secret, "controller": ctrl.id if ctrl else "", "gsm": gsm.id if gsm else "",
+                      "mq2": by_type.get("mq2", ""), "flame": by_type.get("flame", ""), "water": by_type.get("water", ""), "dht": by_type.get("dht22", ""),
+                      "mqtt_port": 8883 if get_settings().mqtt_tls else 1883}}
+
+
+@router.post("/{device_id}/rotate-secret")
+async def rotate_secret(device_id: str, request: Request, actor: User = Depends(require_role(Role.admin)), db: AsyncSession = Depends(db_session)) -> dict:
+    """New broker password for a gateway (lost setup code, or re-setup). The old password stops working."""
+    gw = await db.get(Device, device_id)
+    if not gw or gw.kind != DeviceKind.gateway:
+        raise HTTPException(404, "No such gateway")
+    secret, gw.secret_hash = new_device_secret()
+    audit(db, "user", actor.id, "device.rotate_secret", gw.id, ip=client_ip(request))
+    await db.commit()
+    added = broker_users.upsert(gw.id, secret)
+    return await _setup_info(db, gw, secret) | {"gateway_id": gw.id, "broker_account_created": added, "mqtt": {"username": gw.id, "password": secret}}
 
 
 @router.delete("/{device_id}")

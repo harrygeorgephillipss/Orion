@@ -197,6 +197,25 @@ TEST(sim800_silent_modem_power_cycles) {
   CHECK(!s.ready); CHECK(m.pulses >= 1);
 }
 
+// ---------------- setup code (same vector as frontend/tests/unit/setupcode.test.js) ----------------
+TEST(setup_code_from_the_app_decodes) {
+  SetupConfig c;
+  const char* err = parseSetupCode("T1JJT04xfDE5Mi4xNjguMS4xMHwxODgzfGhvbWUtMXxlc3AzMi0wMXxBYmNfZGVmLWdoaWprbG1ub3BxcnN0dTEyfHVuby0wMXxnc20tMDF8bXEyLTAxfGZsYW1lLTAxfHdhdGVyLTAxfGRodC0wMQ", c);
+  CHECK(err == nullptr);
+  CHECK(std::strcmp(c.host, "192.168.1.10") == 0); CHECK(c.port == 1883); CHECK(std::strcmp(c.home, "home-1") == 0);
+  CHECK(std::strcmp(c.gateway, "esp32-01") == 0); CHECK(std::strcmp(c.password, "Abc_def-ghijklmnopqrstu12") == 0);
+  CHECK(std::strcmp(c.controller, "uno-01") == 0); CHECK(std::strcmp(c.gsm, "gsm-01") == 0);
+  CHECK(std::strcmp(c.mq2, "mq2-01") == 0); CHECK(std::strcmp(c.dht, "dht-01") == 0);
+}
+TEST(setup_code_rejects_bad_input) {
+  SetupConfig c;
+  CHECK(parseSetupCode("not base64 !!", c) != nullptr);
+  CHECK(parseSetupCode("", c) != nullptr);
+  CHECK(parseSetupCode("T1JJT04y", c) != nullptr);                       // "ORION2"
+  CHECK(parseSetupCode("T1JJT04xfGF8MXxi", c) != nullptr);               // too few fields
+  std::string longCode(2000, 'A'); CHECK(parseSetupCode(longCode.c_str(), c) != nullptr);
+}
+
 int main() {
   for (auto& t : tests()) { int before = fails; t.f(); std::printf("%s %s\n", fails == before ? "ok  " : "FAIL", t.n); }
   std::printf("%d checks, %d failed, %zu tests\n", checks, fails, tests().size());

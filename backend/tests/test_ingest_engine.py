@@ -259,3 +259,13 @@ async def test_registration_maintains_broker_password_file(client, auth, tmp_pat
         assert (tmp_path / "passwd").read_text() == ""
     finally:
         st.mqtt_passwd_file = ""
+
+
+async def test_setup_info_and_secret_rotation(gateway, client, auth):
+    s = gateway["setup"]
+    assert s == {"home": "home-1", "gateway": "esp32-test", "password": gateway["mqtt"]["password"], "controller": "uno-test", "gsm": "gsm-test",
+                 "mq2": "mq2-1", "flame": "flame-1", "water": "water-1", "dht": "dht-1", "mqtt_port": 1883}
+    assert (await client.post("/api/v1/devices/esp32-test/rotate-secret", headers=auth["member"])).status_code == 403
+    r = await client.post("/api/v1/devices/esp32-test/rotate-secret", headers=auth["admin"])
+    assert r.status_code == 200 and r.json()["setup"]["password"] != s["password"] and len(r.json()["setup"]["password"]) >= 24
+    assert (await client.post("/api/v1/devices/uno-test/rotate-secret", headers=auth["admin"])).status_code == 404

@@ -9,7 +9,31 @@
 #include <esp_task_wdt.h>
 #include <Preferences.h>
 #include <OrionCore.h>
-#include "secrets.h"
+#include <WebServer.h>
+#include <DNSServer.h>
+#if __has_include("secrets.h")
+#include "secrets.h"   // optional: compile-time defaults (development). Normally the gateway is set up from the app.
+#endif
+#ifndef WIFI_SSID
+#define WIFI_SSID ""
+#define WIFI_PASSWORD ""
+#define MQTT_HOST ""
+#define MQTT_PORT 1883
+#define HOME_ID "home-1"
+#define GATEWAY_ID ""
+#define MQTT_PASSWORD ""
+#define CONTROLLER_ID ""
+#define GSM_MODULE_ID ""
+#define SENSOR_MQ2 ""
+#define SENSOR_FLAME ""
+#define SENSOR_WATER ""
+#define SENSOR_DHT ""
+#define EMERGENCY_NUMBERS {""}
+#endif
+#ifndef MQTT_TLS
+#define MQTT_TLS 0
+#define MQTT_CA_CERT ""
+#endif
 
 using namespace orion;
 
@@ -40,7 +64,66 @@ void saveContacts() {
   nvs.begin("orion", false); nvs.putUChar("n", contactsN); nvs.putBytes("c", contacts, sizeof(Contact) * contactsN); nvs.end();
 }
 
-String topic(const char* kind) { return String("orion/") + HOME_ID + "/" + GATEWAY_ID + "/" + kind; }
+// ---------------- runtime configuration (setup code from the app, stored in flash) ----------------
+SetupConfig net; char wifiSsid[33] = {0}, wifiPass[65] = {0};
+bool configured = false, setupMode = false;
+WebServer web(80); DNSServer dns; String setupError;
+const int PIN_BOOT = 0;
+
+bool loadNet() {
+  Preferences p; p.begin("net", true);
+  String ssid = p.getString("ssid", ""), pass = p.getString("wpass", ""), code = p.getString("code", "");
+  p.end();
+  if (ssid.length() && code.length() && !parseSetupCode(code.c_str(), net)) {
+    strlcpy(wifiSsid, ssid.c_str(), sizeof(wifiSsid)); strlcpy(wifiPass, pass.c_str(), sizeof(wifiPass)); return true;
+  }
+  if (strlen(WIFI_SSID) && strlen(GATEWAY_ID)) {  // development fallback: secrets.h
+    strlcpy(wifiSsid, WIFI_SSID, sizeof(wifiSsid)); strlcpy(wifiPass, WIFI_PASSWORD, sizeof(wifiPass));
+    strlcpy(net.host, MQTT_HOST, sizeof(net.host)); net.port = MQTT_PORT; strlcpy(net.home, HOME_ID, sizeof(net.home));
+    strlcpy(net.gateway, GATEWAY_ID, sizeof(net.gateway)); strlcpy(net.password, MQTT_PASSWORD, sizeof(net.password));
+    strlcpy(net.controller, CONTROLLER_ID, sizeof(net.controller)); strlcpy(net.gsm, GSM_MODULE_ID, sizeof(net.gsm));
+    strlcpy(net.mq2, SENSOR_MQ2, sizeof(net.mq2)); strlcpy(net.flame, SENSOR_FLAME, sizeof(net.flame));
+    strlcpy(net.water, SENSOR_WATER, sizeof(net.water)); strlcpy(net.dht, SENSOR_DHT, sizeof(net.dht));
+    return true;
+  }
+  return false;
+}
+
+String topic(const char* kind) { return String("orion/") + net.home + "/" + net.gateway + "/" + kind; }
+
+// ---------------- setup mode: own Wi-Fi network + setup page (alerts keep working meanwhile) ----------------
+String htmlEsc(const String& in) { String o; for (char c : in) { if (c == '<') o += "&lt;"; else if (c == '>') o += "&gt;"; else if (c == '&') o += "&amp;"; else if (c == '"') o += "&quot;"; else o += c; } return o; }
+void setupPage() {
+  String h = F("<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'><title>ORION gateway setup</title>"
+    "<style>body{font:16px system-ui;margin:0;padding:20px;background:#0f1517;color:#e6eeee}main{max-width:460px;margin:auto}"
+    "input,textarea{width:100%;box-sizing:border-box;padding:10px;margin:4px 0 14px;border-radius:10px;border:1px solid #2c3a3e;background:#1b2529;color:inherit;font:inherit}"
+    "button{padding:12px 18px;border:0;border-radius:12px;background:#86d0c3;color:#0b201c;font-weight:600}.e{color:#ef8a8a}small{color:#8a9b9e}</style><main>"
+    "<h1>ORION gateway setup</h1><p><small>Wi-Fi details go only to this device. Paste the setup code from the ORION app (Settings &rarr; Registered devices).</small></p>");
+  if (setupError.length()) h += "<p class=e>" + htmlEsc(setupError) + "</p>";
+  if (configured) h += "<p><small>Currently set up as " + htmlEsc(net.gateway) + " &rarr; " + htmlEsc(net.host) + "</small></p>";
+  h += F("<form method=post action=/save><label>Home Wi-Fi name<input name=ssid maxlength=32 required></label>"
+    "<label>Home Wi-Fi password<input name=pass type=password maxlength=64></label>"
+    "<label>Setup code<textarea name=code rows=4 required></textarea></label><button>Save and connect</button></form></main>");
+  web.send(200, "text/html", h);
+}
+void setupSave() {
+  String ssid = web.arg("ssid"), pass = web.arg("pass"), code = web.arg("code"); code.trim();
+  SetupConfig test;
+  const char* err = parseSetupCode(code.c_str(), test);
+  if (!ssid.length() || ssid.length() > 32 || pass.length() > 64) err = "Wi-Fi name or password is too long or empty";
+  if (err) { setupError = String("Not saved: ") + err; setupPage(); return; }
+  Preferences p; p.begin("net", false); p.putString("ssid", ssid); p.putString("wpass", pass); p.putString("code", code); p.end();
+  web.send(200, "text/html", F("<meta name=viewport content='width=device-width'><body style='font:16px system-ui;padding:20px'><h1>Saved</h1><p>The gateway restarts and joins your Wi-Fi. Within a minute it should show as online in the ORION app. If not, hold the BOOT button for 5 s to return here.</p>"));
+  delay(1500); ESP.restart();
+}
+void startSetupMode() {
+  setupMode = true; mqtt.disconnect(); WiFi.disconnect(true);
+  char ap[24]; snprintf(ap, sizeof(ap), "ORION-Setup-%04X", (unsigned)(ESP.getEfuseMac() & 0xFFFF));
+  WiFi.mode(WIFI_AP); WiFi.softAP(ap, "orion-setup");   // WPA2: only someone told the password can configure it
+  dns.start(53, "*", WiFi.softAPIP());
+  web.on("/", HTTP_GET, setupPage); web.on("/save", HTTP_POST, setupSave); web.onNotFound(setupPage);
+  web.begin();
+}
 uint32_t seq = 0, lastUnoRx = 0, unoBoot = 0, lastHb = 0, lastGsm = 0, mqttRetryAt = 0, mqttBackoff = 1000, attemptId = 1;
 bool unoSeen = false;
 char unoFw[16] = "unknown";
@@ -71,7 +154,7 @@ struct GsmIO : ModemIO {
 } gsmIo;
 Sim800 sim(gsmIo);
 const char* HAZARD_NAME[] = {"none", "smoke", "flame", "water"};
-const char* HAZARD_SENSOR[] = {"", SENSOR_MQ2, SENSOR_FLAME, SENSOR_WATER};
+const char* hazardSensor(uint8_t h) { return h == 1 ? net.mq2 : h == 2 ? net.flame : h == 3 ? net.water : ""; }
 void raiseGsm(uint8_t hazard) {
   char text[160];
   snprintf(text, sizeof(text), "ORION ALERT: %s detected at home. Check immediately. If there is danger call 112 / 101.", hazard == 2 ? "FLAME" : hazard == 1 ? "SMOKE" : "HAZARD");
@@ -100,22 +183,22 @@ void onUnoFrame(const Frame& f) {
   JsonDocument d;
   String out;
   if (f.type == 'T' && f.n >= 13) {
-    d["seq"] = ++seq; d["controller"] = CONTROLLER_ID;
+    d["seq"] = ++seq; d["controller"] = net.controller;
     JsonArray r = d["readings"].to<JsonArray>();
-    JsonObject m = r.add<JsonObject>(); m["sensor"] = SENSOR_MQ2; m["quality"] = QUALITY[f.f[2] & 3]; m["state"] = LEVEL[f.f[3] & 3];
+    JsonObject m = r.add<JsonObject>(); m["sensor"] = net.mq2; m["quality"] = QUALITY[f.f[2] & 3]; m["state"] = LEVEL[f.f[3] & 3];
     if (f.f[2] == 0) m["fields"]["raw_adc"] = f.f[1]; else m["fields"]["raw_adc"] = nullptr;  // only valid readings carry a value
     m["warmup_remaining_s"] = f.f[4]; m["fw_threshold"]["warning"] = cfg::MQ2_WARNING; m["fw_threshold"]["critical"] = cfg::MQ2_CRITICAL;
-    JsonObject fl = r.add<JsonObject>(); fl["sensor"] = SENSOR_FLAME; fl["quality"] = QUALITY[f.f[6] & 3]; fl["state"] = f.f[5] ? "critical" : "normal"; fl["fields"]["detected"] = (bool)f.f[5];
-    JsonObject w = r.add<JsonObject>(); w["sensor"] = SENSOR_WATER; w["quality"] = QUALITY[f.f[8] & 3]; w["state"] = f.f[9] ? "warning" : "normal";
+    JsonObject fl = r.add<JsonObject>(); fl["sensor"] = net.flame; fl["quality"] = QUALITY[f.f[6] & 3]; fl["state"] = f.f[5] ? "critical" : "normal"; fl["fields"]["detected"] = (bool)f.f[5];
+    JsonObject w = r.add<JsonObject>(); w["sensor"] = net.water; w["quality"] = QUALITY[f.f[8] & 3]; w["state"] = f.f[9] ? "warning" : "normal";
     w["fields"]["raw_adc"] = f.f[7]; w["fields"]["wet"] = (bool)f.f[9]; w["fw_threshold"]["wet"] = cfg::WATER_WET;
-    JsonObject t = r.add<JsonObject>(); t["sensor"] = SENSOR_DHT;
+    JsonObject t = r.add<JsonObject>(); t["sensor"] = net.dht;
     bool ok = f.f[10] != -9999 && f.f[12] == 0;
     t["quality"] = ok ? "valid" : "fault"; t["state"] = ok ? "normal" : "unknown";
     if (ok) { t["fields"]["temperature_c"] = f.f[10] / 10.0; t["fields"]["humidity_percent"] = f.f[11] / 10.0; }
     else { t["fields"]["temperature_c"] = nullptr; t["fields"]["humidity_percent"] = nullptr; t["fault"] = "read failure or stale"; }
     serializeJson(d, out); if (mqtt.connected()) mqtt.publish(topic("telemetry").c_str(), out.c_str());
   } else if (f.type == 'A' && f.n >= 10) {
-    d["seq"] = ++seq; d["controller"] = CONTROLLER_ID; JsonObject a = d["actuators"].to<JsonObject>();
+    d["seq"] = ++seq; d["controller"] = net.controller; JsonObject a = d["actuators"].to<JsonObject>();
     a["fan"]["commanded"] = f.f[1] ? "on" : "off"; a["fan"]["name"] = "12 V exhaust fan"; a["fan"]["cooldown_remaining_s"] = f.f[8]; a["fan"]["feedback"] = false; a["fan"]["by"] = "UNO firmware";
     a["buzzer"]["commanded"] = f.f[2] ? "on" : "off"; a["buzzer"]["name"] = "Buzzer"; a["buzzer"]["feedback"] = false;
     a["mg995"]["target_angle"] = f.f[3]; a["mg995"]["name"] = "MG995 servo — model door"; a["mg995"]["reported_position"] = nullptr; a["mg995"]["feedback"] = false;
@@ -128,7 +211,7 @@ void onUnoFrame(const Frame& f) {
     serializeJson(d, out); if (mqtt.connected()) mqtt.publish(topic("actuators").c_str(), out.c_str());
   } else if (f.type == 'E' && f.n >= 3) {
     uint8_t hz = f.f[1] & 3, code = f.f[2] < 10 ? f.f[2] : 0;
-    d["seq"] = ++seq; d["controller"] = CONTROLLER_ID; d["kind"] = "action"; d["hazard"] = HAZARD_NAME[hz]; d["sensor"] = HAZARD_SENSOR[hz]; d["text"] = EVENT_TEXT[code];
+    d["seq"] = ++seq; d["controller"] = net.controller; d["kind"] = "action"; d["hazard"] = HAZARD_NAME[hz]; d["sensor"] = hazardSensor(hz); d["text"] = EVENT_TEXT[code];
     serializeJson(d, out); publishOrBuffer(topic("event"), out);
   } else if (f.type == 'G' && f.n >= 2) {
     raiseGsm(f.f[1] & 3);
@@ -174,7 +257,7 @@ void onMqtt(char* t, byte* payload, unsigned int len) {
 void ensureMqtt() {
   if (WiFi.status() != WL_CONNECTED || mqtt.connected() || (int32_t)(millis() - mqttRetryAt) < 0) return;
   String will = topic("status");
-  if (mqtt.connect(GATEWAY_ID, GATEWAY_ID, MQTT_PASSWORD, will.c_str(), 1, true, "{\"online\":false}")) {
+  if (mqtt.connect(net.gateway, net.gateway, net.password, will.c_str(), 1, true, "{\"online\":false}")) {
     mqttBackoff = 1000;
     mqtt.publish(will.c_str(), "{\"online\":true,\"fw\":\"0.3.0\",\"boot_reason\":\"power_on\"}", true);
     mqtt.subscribe(topic("cmd").c_str(), 1);
@@ -187,15 +270,15 @@ void ensureMqtt() {
 
 void reportGsm() {
   JsonDocument d; d["seq"] = ++seq;
-  JsonObject m = d["module"].to<JsonObject>(); m["id"] = GSM_MODULE_ID; m["registered"] = sim.ready && sim.registered; m["csq"] = sim.csq; m["sim"] = sim.simReady ? "READY" : "NOT READY";
+  JsonObject m = d["module"].to<JsonObject>(); m["id"] = net.gsm; m["registered"] = sim.ready && sim.registered; m["csq"] = sim.csq; m["sim"] = sim.simReady ? "READY" : "NOT READY";
   JsonArray at = d["attempts"].to<JsonArray>();
   const char* ST[] = {"queued", "sending", "sent", "failed", "timeout", "answered"};
   bool any = false;
   for (uint8_t i = 0; i < sim.count; i++) {
     Attempt& a = sim.attempts[i];
-    JsonObject o = at.add<JsonObject>(); char id[24]; snprintf(id, sizeof(id), "%s-%lu", GATEWAY_ID, (unsigned long)a.id);
+    JsonObject o = at.add<JsonObject>(); char id[80]; snprintf(id, sizeof(id), "%s-%lu", net.gateway, (unsigned long)a.id);
     o["id"] = id; o["type"] = a.type == AttemptType::Sms ? "sms" : "call"; o["destination"] = a.number; o["status"] = ST[(int)a.status]; o["note"] = a.note;
-    if (a.tag) { o["hazard"] = HAZARD_NAME[a.tag & 3]; o["sensor"] = HAZARD_SENSOR[a.tag & 3]; }
+    if (a.tag) { o["hazard"] = HAZARD_NAME[a.tag & 3]; o["sensor"] = hazardSensor(a.tag & 3); }
     any |= a.changed; a.changed = false;
   }
   String s; serializeJson(d, s); publishOrBuffer(topic("gsm"), s);
@@ -209,13 +292,17 @@ void setup() {
   GSM.begin(9600, SERIAL_8N1, PIN_GSM_RX, PIN_GSM_TX);
   sim.begin();
   loadContacts();
-  WiFi.mode(WIFI_STA); WiFi.setAutoReconnect(true); WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  pinMode(PIN_BOOT, INPUT_PULLUP);
+  configured = loadNet();
+  if (!configured) startSetupMode();
+  else { WiFi.mode(WIFI_STA); WiFi.setAutoReconnect(true); WiFi.begin(wifiSsid, wifiPass); }
+
 #if MQTT_TLS
   secure.setCACert(MQTT_CA_CERT); mqtt.setClient(secure);
 #else
   mqtt.setClient(plain);
 #endif
-  mqtt.setServer(MQTT_HOST, MQTT_PORT); mqtt.setCallback(onMqtt); mqtt.setBufferSize(1024); mqtt.setKeepAlive(15);
+  mqtt.setServer(net.host, net.port); mqtt.setCallback(onMqtt); mqtt.setBufferSize(1024); mqtt.setKeepAlive(15);
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   esp_task_wdt_config_t wc = {.timeout_ms = 10000, .idle_core_mask = 0, .trigger_panic = true}; esp_task_wdt_reconfigure(&wc);
 #else
@@ -230,13 +317,16 @@ void loop() {
   Frame fr;
   while (UNO.available()) if (unoLink.feed((char)UNO.read(), fr)) onUnoFrame(fr);
   sim.poll();                                  // GSM works with or without Wi-Fi
-  ensureMqtt(); mqtt.loop();
+  static uint32_t bootHeld = 0;                // hold BOOT for 5 s → setup mode
+  if (digitalRead(PIN_BOOT) == LOW) { if (!bootHeld) bootHeld = now; else if (!setupMode && now - bootHeld > 5000) startSetupMode(); } else bootHeld = 0;
+  if (setupMode) { dns.processNextRequest(); web.handleClient(); }
+  else { ensureMqtt(); mqtt.loop(); }
   if (now - lastHb >= 2000) {
     lastHb = now;
     long hb[] = {(long)++seq, (long)(now / 1000)}; char buf[kLinkMax + 8]; size_t n = buildFrame(buf, sizeof(buf), 'H', hb, 2); UNO.write((const uint8_t*)buf, n);
     bool unoOk = unoSeen && now - lastUnoRx < cfg::LINK_TIMEOUT_MS;
     JsonDocument d; d["seq"] = ++seq; d["uptime_s"] = now / 1000; d["rssi"] = WiFi.RSSI();
-    JsonObject c = d["controllers"].to<JsonArray>().add<JsonObject>(); c["id"] = CONTROLLER_ID; c["link_ok"] = unoOk;
+    JsonObject c = d["controllers"].to<JsonArray>().add<JsonObject>(); c["id"] = net.controller; c["link_ok"] = unoOk;
     if (unoOk) c["last_rx_ms_ago"] = now - lastUnoRx;
     c["boot_reason"] = (unoBoot & 8) ? "watchdog" : (unoBoot & 4) ? "brown_out" : (unoBoot & 2) ? "reset" : "power_on";
     String s; serializeJson(d, s); if (mqtt.connected()) mqtt.publish(topic("heartbeat").c_str(), s.c_str());
