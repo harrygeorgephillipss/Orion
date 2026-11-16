@@ -22,7 +22,7 @@ function Step($t) { Write-Host "`n== $t" -ForegroundColor Cyan }
 function Info($t) { Write-Host "   $t" }
 function Warn($t) { Write-Host "   $t" -ForegroundColor Yellow }
 function Ask($q, $def = 'Y') { $a = Read-Host "   $q [$def]"; if (-not $a) { $a = $def }; return ($a -match '^[Yy]') }
-function Done($msg) { Write-Host "`n$msg" -ForegroundColor Yellow; Read-Host 'Press Enter to close'; exit 1 }
+function Done($msg) { Write-Host "`n$msg" -ForegroundColor Yellow; Stop-Transcript | Out-Null; Read-Host 'Press Enter to close'; exit 1 }
 function RefreshPath { $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') }
 function Plain($s) { [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($s)) }
 
@@ -33,6 +33,8 @@ if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
   exit
 }
 $User = $env:USERNAME
+Start-Transcript -Path "$env:USERPROFILE\ORION-install-log.txt" -Append | Out-Null  # send this file if something stops
+Write-Host "ORION setup - this window must stay open. Log: $env:USERPROFILE\ORION-install-log.txt" -ForegroundColor Green
 
 Step '1/8  Programs (Git, Docker Desktop, Tailscale)'
 if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { Done 'winget is missing. Install "App Installer" from the Microsoft Store, then run this again.' }
@@ -95,17 +97,17 @@ $LanIp = if ($lan) { $lan.IPv4Address[0].IPAddress } else { '' }
 Info "Home network address of this laptop: $LanIp"
 
 Step '5/8  Settings (.env)'
-$Env = "$Dir\.env"
+$EnvFile = "$Dir\.env"
 function SetEnv($k, $v) {
-  $lines = [IO.File]::ReadAllLines($Env); $found = $false
+  $lines = [IO.File]::ReadAllLines($EnvFile); $found = $false
   $out = foreach ($l in $lines) { if ($l -match "^$k=") { $found = $true; "$k=$v" } else { $l } }
   if (-not $found) { $out = @($out) + "$k=$v" }
-  [IO.File]::WriteAllText($Env, (($out -join "`n") + "`n"))
+  [IO.File]::WriteAllText($EnvFile, (($out -join "`n") + "`n"))
 }
-if (-not (Test-Path $Env)) {
+if (-not (Test-Path $EnvFile)) {
   Info 'Choose the owner account you will sign in with (password: 10+ characters, upper and lower case and a digit).'
   docker run --rm -it -v "${Dir}:/w" -w /w python:3.12-alpine python scripts/setup.py --server-url $Url
-  if (-not (Test-Path $Env)) { Done 'Settings were not created. Run this again.' }
+  if (-not (Test-Path $EnvFile)) { Done 'Settings were not created. Run this again.' }
   if (Ask 'Add your Anthropic API key now so Aura uses Claude? (y/n)') {
     $k = Plain (Read-Host '   Anthropic API key (hidden)' -AsSecureString)
     $m = Read-Host '   Claude model ID to use (from the Anthropic models page)'
@@ -118,10 +120,10 @@ if (-not (Test-Path $Env)) {
 } else { Info '.env already exists - keeping your secrets and keys.' }
 if ($LanIp) { SetEnv 'ORION_LAN_HOST' $LanIp }
 # only this Windows account may read the secrets file
-icacls $Env /inheritance:r /grant:r "${User}:(R,W)" "SYSTEM:(F)" "Administrators:(F)" *> $null
+icacls $EnvFile /inheritance:r /grant:r "${User}:(R,W)" "SYSTEM:(F)" "Administrators:(F)" *> $null
 
 Step '6/8  Starting ORION'
-docker compose -f "$Dir\deployment\docker-compose.yml" --env-file $Env up -d --build
+docker compose -f "$Dir\deployment\docker-compose.yml" --env-file $EnvFile up -d --build
 if ($LASTEXITCODE -ne 0) { Done 'ORION did not start. Run this again; if it repeats, send the messages above to your developer.' }
 $ok = $false
 for ($i = 0; $i -lt 60; $i++) {
