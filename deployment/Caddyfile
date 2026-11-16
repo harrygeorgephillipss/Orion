@@ -1,5 +1,6 @@
-# Replace orion.example.com with your domain (public DNS) — or use `tls internal` for a LAN-only certificate.
-orion.example.com {
+# HTTPS in front of the ORION backend. The domain comes from ORION_DOMAIN in .env (public DNS must point here);
+# Caddy obtains and renews the certificate automatically. The broker reuses it for its TLS listener (port 8883).
+{$ORION_DOMAIN:orion.example.com} {
 	encode gzip
 	reverse_proxy backend:8000
 }

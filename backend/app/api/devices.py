@@ -108,7 +108,7 @@ async def _setup_info(db: AsyncSession, gw: Device, secret: str) -> dict:
     by_type = {s.type: s.id for s in sens}
     return {"setup": {"home": gw.home_id, "gateway": gw.id, "password": secret, "controller": ctrl.id if ctrl else "", "gsm": gsm.id if gsm else "",
                       "mq2": by_type.get("mq2", ""), "flame": by_type.get("flame", ""), "water": by_type.get("water", ""), "dht": by_type.get("dht22", ""),
-                      "mqtt_port": 8883 if get_settings().mqtt_tls else 1883, "lan_host": get_settings().lan_host}}
+                      "mqtt_port": get_settings().gateway_mqtt_port or (8883 if get_settings().mqtt_tls else 1883), "lan_host": get_settings().lan_host}}
 
 
 @router.post("/{device_id}/rotate-secret")

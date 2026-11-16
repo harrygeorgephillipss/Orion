@@ -26,8 +26,13 @@ services:
       - ./mosquitto/entrypoint.sh:/orion-entrypoint.sh:ro
       - mqttauth:/run/orion-auth            # broker accounts, maintained by the backend
       - mqttdata:/mosquitto/data
+      - caddydata:/caddy-data:ro            # Caddy's certificate, reused for TLS on 8883 (cloud setup)
     entrypoint: ["sh", "/orion-entrypoint.sh"]
-    ports: ["1883:1883"]   # gateways on the LAN connect here; use 8883 + TLS when exposed beyond the LAN
+    environment:
+      ORION_DOMAIN: ${ORION_DOMAIN:-}
+    ports:
+      - "${ORION_MQTT_PLAIN_BIND:-1883}:1883"           # plain: home network only (cloud: 127.0.0.1:1883)
+      - "${ORION_MQTT_TLS_BIND:-127.0.0.1:8883}:8883"   # TLS: gateways over the internet (cloud: 8883)
 
   backend:
     build: { context: .., dockerfile: backend/Dockerfile }
@@ -47,6 +52,8 @@ services:
     image: caddy:2
     restart: unless-stopped
     profiles: ["https"]   # enable with: --profile https
+    environment:
+      ORION_DOMAIN: ${ORION_DOMAIN:-}
     ports: ["80:80", "443:443"]
     volumes: [./Caddyfile:/etc/caddy/Caddyfile:ro, caddydata:/data]
     depends_on: [backend]

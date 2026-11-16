@@ -4,6 +4,8 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <time.h>
+#include "le_roots.h"
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <esp_task_wdt.h>
@@ -31,8 +33,10 @@
 #define EMERGENCY_NUMBERS {""}
 #endif
 #ifndef MQTT_TLS
-#define MQTT_TLS 0
-#define MQTT_CA_CERT ""
+#define MQTT_TLS 0  // 1 = always TLS; otherwise TLS is used when the broker port is 8883 (cloud server)
+#endif
+#ifndef MQTT_CA_CERT
+#define MQTT_CA_CERT ""  // empty = Let's Encrypt roots (le_roots.h)
 #endif
 
 using namespace orion;
@@ -297,11 +301,13 @@ void setup() {
   if (!configured) startSetupMode();
   else { WiFi.mode(WIFI_STA); WiFi.setAutoReconnect(true); WiFi.begin(wifiSsid, wifiPass); }
 
-#if MQTT_TLS
-  secure.setCACert(MQTT_CA_CERT); mqtt.setClient(secure);
-#else
-  mqtt.setClient(plain);
-#endif
+  if (MQTT_TLS || net.port == 8883) {  // encrypted link to an internet (cloud) broker; certificate checked
+    secure.setCACert(strlen(MQTT_CA_CERT) ? MQTT_CA_CERT : LE_ROOTS);
+    configTime(0, 0, "pool.ntp.org", "time.google.com");  // certificate dates need the real time
+    mqtt.setClient(secure);
+  } else {
+    mqtt.setClient(plain);
+  }
   mqtt.setServer(net.host, net.port); mqtt.setCallback(onMqtt); mqtt.setBufferSize(1024); mqtt.setKeepAlive(15);
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   esp_task_wdt_config_t wc = {.timeout_ms = 10000, .idle_core_mask = 0, .trigger_panic = true}; esp_task_wdt_reconfigure(&wc);

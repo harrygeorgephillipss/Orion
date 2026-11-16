@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     mqtt_host: str = "localhost"
     mqtt_port: int = 1883
     mqtt_tls: bool = False
+    gateway_mqtt_port: int = 0  # broker port offered to gateways (0 = 8883 with mqtt_tls, else 1883); cloud: 8883
     lan_host: str = ""  # this server's address on the home network, offered to gateways in the setup code
     mqtt_username: str = ""
     mqtt_password: str = ""
