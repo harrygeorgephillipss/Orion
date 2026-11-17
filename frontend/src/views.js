@@ -120,11 +120,34 @@
     </ul>`;
   }
 
+  /* ---------- getting connected: real ESP32, or the server's simulated home ---------- */
+  function connectCard() {
+    const admin = A().isAdmin();
+    return `<section class="card connect"><div class="sec-h"><h2>Connect your ORION hardware</h2><span class="hint">Readings appear here as soon as the ESP32 sends them</span></div>
+      <ol class="steps">
+        <li><b>Register the ESP32</b><span>Settings → Registered devices. You get a one-time setup code.</span></li>
+        <li><b>Put the ESP32 in setup mode</b><span>First start, or hold its BOOT button for 5 seconds. It opens a Wi-Fi called <b>ORION-Setup-…</b> (password <b>orion-setup</b>).</span></li>
+        <li><b>Join that Wi-Fi with your phone</b><span>A page opens: choose your home Wi-Fi and paste the setup code.</span></li>
+        <li><b>Done</b><span>The ESP32 connects to this server and the UNO's sensors show up here live.</span></li>
+      </ol>
+      <div class="row-btns">${admin ? `<button class="btn" data-action="connect-esp">Register my ESP32</button>${A().source.demo && A().source.demo.running ? '' : '<button class="btn ghost" data-action="demo-start">Start a simulated home</button>'}` : '<span class="hint">Ask the home’s owner or an admin to register the ESP32.</span>'}</div>
+      <p class="hint">No hardware yet? The simulated home runs on your server and sends realistic readings through the same path the ESP32 will use. Everything it sends is labelled “simulated”.</p></section>`;
+  }
+  const DEMO_SCN = [['normal', 'Normal'], ['smoke_warning', 'Smoke'], ['smoke_critical', 'Heavy smoke'], ['flame', 'Flame'], ['water', 'Water leak'], ['dht_fault', 'Sensor fault'], ['uno_offline', 'UNO offline'], ['gsm_outage', 'No GSM signal']];
+  function demoBar() {
+    const d = A().mode === 'live' && A().source.demo;
+    if (!d || !d.running) return '';
+    const owner = A().user && A().user.role === 'owner';
+    return `<section class="card sim-ctl" aria-label="Simulated home controls"><div><b>Simulated home is running</b><span class="hint">Readings from <b>ESP32 (simulated)</b> are invented test data. Try what happens in an emergency:</span></div>
+      <div class="seg wrap">${DEMO_SCN.map(([k, l]) => `<button class="seg-b${d.scenario === k ? ' on' : ''}" data-action="demo-scn" data-s="${k}">${esc(l)}</button>`).join('')}</div>
+      ${owner ? '<button class="lnk" data-action="demo-stop">Remove the simulated home</button>' : ''}</section>`;
+  }
+
   /* ================= Home ================= */
   const home = {
     title: 'Home',
     mount(el) {
-      el.innerHTML = `<div id="h-status"></div><div id="h-alerts" class="alerts"></div>
+      el.innerHTML = `<div id="h-status"></div><div id="h-demo"></div><div id="h-alerts" class="alerts"></div>
         <div class="sec-h"><h2>Sensors</h2><span class="hint">Tap a sensor for details</span></div><div id="h-tiles" class="tiles"></div>
         <div class="two">
           <section class="card"><div class="sec-h"><h2>Devices</h2><a class="lnk" href="#devices">All devices</a></div><div id="h-dev"></div></section>
@@ -135,12 +158,13 @@
     update(el) {
       const { snap, ev } = A();
       const g = C.guard(ev, 5);
-      if (g) { set(el, '#h-status', ev && ev.system !== 'LOADING' ? statusCard(ev, snap) : ''); set(el, '#h-tiles', g); ['#h-alerts', '#h-dev', '#h-conn'].forEach((s) => set(el, s, '')); return; }
+      set(el, '#h-demo', demoBar());
+      if (g) { set(el, '#h-status', ev && ev.system !== 'LOADING' ? statusCard(ev, snap) : ''); set(el, '#h-tiles', ev && ev.noData && A().mode === 'live' ? connectCard() : g); ['#h-alerts', '#h-dev', '#h-conn'].forEach((s) => set(el, s, '')); return; }
       set(el, '#h-status', statusCard(ev, snap));
       const act = snap.incidents.filter((i) => i.state !== 'cleared').sort((a, b) => rank(b) - rank(a) || b.opened_at - a.opened_at);
       set(el, '#h-alerts', act.map(alertCard).join(''));
       const tiles = tilesOf(snap);
-      set(el, '#h-tiles', tiles.length ? tiles.map((t) => tile(t, snap, ev)).join('') : C.statePanel('empty', 'No sensors registered', 'Register a controller and its sensors to see readings here.'));
+      set(el, '#h-tiles', tiles.length ? tiles.map((t) => tile(t, snap, ev)).join('') : A().mode === 'live' ? connectCard() : C.statePanel('empty', 'No sensors registered', 'Register a controller and its sensors to see readings here.'));
       set(el, '#h-dev', devicesCompact(snap));
       set(el, '#h-conn', connCompact(snap, ev));
     },

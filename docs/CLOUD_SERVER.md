@@ -72,6 +72,22 @@ Claude model ID and a Google Cloud API key. Keys are typed only on the server an
 | Firewall (ufw) | 22, 80, 443, 8883 open; everything else closed |
 | Swap | 2 GB if the server has less than 2 GB RAM |
 
+## Aura keys (Claude, Google voice)
+
+```bash
+sudo bash /opt/orion/scripts/cloud/set-keys.sh
+```
+
+Paste the keys when asked (they stay hidden and are stored only in `/opt/orion/.env`). It restarts the backend and
+prints whether Aura uses Claude and which voice engine is active. Never paste keys into chats or GitHub.
+
+## Simulated home (no hardware yet)
+
+Home screen → **Start a simulated home** (admin). The server runs the device simulator as a *simulated* ESP32 + UNO
+with MQ-2, flame, water and DHT22 sensors: real broker → server → app path, every value labelled "simulated", no push
+notifications. Buttons switch scenarios (smoke, flame, water leak, sensor fault, UNO offline, no GSM). The owner can
+remove it; the real ESP32 is registered separately and works alongside it.
+
 ## Maintenance
 
 ```bash

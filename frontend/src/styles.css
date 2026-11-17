@@ -431,3 +431,15 @@ details.more>summary::-webkit-details-marker{display:none}
 .vo-ring{display:none}
 .row-btns input{flex:1;min-width:0;width:auto}
 .tbl select{width:auto;min-width:104px;padding:6px 8px}.tbl input[type=checkbox]{width:auto}.tbl td .btn{white-space:nowrap}
+
+/* Home: connect guide + simulated-home controls; room for the floating Aura button */
+#view{padding-bottom:84px}
+.connect .steps{margin:4px 0 14px;padding-left:22px;display:grid;gap:10px}
+.connect .steps li>b{display:block}.connect .steps li span{color:var(--muted);font-size:.92em}
+.connect .row-btns{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}
+.sim-ctl{display:grid;gap:10px;margin-bottom:14px;border:1px dashed var(--warn,#d9a441)}
+.sim-ctl .hint{display:block}.seg.wrap{flex-wrap:wrap}
+.tiles > .connect{grid-column:1/-1}
+.connect .steps li{display:list-item}
+.connect .sec-h{flex-wrap:wrap;gap:4px 12px}
+.sim-ctl .lnk{justify-self:start}

@@ -264,6 +264,18 @@
       U.store.set(ORION.sources.LiveSource.SERVER_KEY, v.replace(/\/+$/, ''));
       app.setSource('live'); app.mountView(); app.toast(v ? 'Server address saved.' : 'Using this page’s own server.');
     } else if (a === 'cmd') app.confirmCommand(t.dataset.act);
+    else if (a === 'connect-esp') {
+      location.hash = 'config';
+      setTimeout(() => { const f = document.querySelector('form[data-la="register"]'); if (f) { f.closest('details').open = true; f.scrollIntoView({ block: 'center' }); const i = f.querySelector('input'); if (i) i.focus(); } }, 400);
+    } else if (a === 'demo-start' || a === 'demo-scn' || a === 'demo-stop') {
+      const op = { 'demo-start': 'start', 'demo-scn': 'scenario', 'demo-stop': 'stop' }[a];
+      const go = () => { t.disabled = true; app.source.demoAction(op, t.dataset.s).then((r) => {
+        app.toast(r.ok ? { start: 'Simulated home started — readings arrive within a few seconds.', scenario: 'Scenario changed. The simulated sensors react within a few seconds.', stop: 'Simulated home removed.' }[op] : 'Couldn’t do that: ' + r.error, r.ok ? '' : 'bad');
+        app.mountView();
+      }); };
+      if (op === 'stop') confirmBox({ title: 'Remove the simulated home?', confirm: 'Remove', body: '<p>This deletes the simulated ESP32, UNO and sensors. Their history stays in the database, labelled simulated.</p>', onConfirm: go });
+      else go();
+    }
     else if (a === 'aura-open') { if (panelOpen()) closePanel(); else openPanel(); }
     else if (a === 'aura-close') closePanel();
     else if (a === 'theme') { document.body.dataset.theme = t.dataset.t; U.store.set('orion.theme', t.dataset.t); app.mountView(); }

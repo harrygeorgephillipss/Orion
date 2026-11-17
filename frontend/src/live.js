@@ -63,7 +63,7 @@
       await this._afterAuth();
     }
     async _afterAuth() {
-      await Promise.all([this._loadConfig(), this.refetch(), this._loadAura()]);
+      await Promise.all([this._loadConfig(), this.refetch(), this._loadAura(), this.loadDemo()]);
       this._openWs();
       if (ORION.native && ORION.native.isNative && !this._nativeWired) {
         this._nativeWired = true;
@@ -278,6 +278,15 @@
         if (!r.ok) { const j = await r.json().catch(() => ({})); return { ok: false, code: (j.detail && j.detail.code) || String(r.status) }; }
         return { ok: true, blob: await r.blob() };
       } catch (e) { return { ok: false, code: 'network' }; }
+    }
+    /* Simulated home on the server (try ORION without hardware; everything it sends is labelled simulated). */
+    async loadDemo() { const r = await this.api('/devices/demo'); this.demo = r.ok ? r.data : null; return this.demo; }
+    async demoAction(op, scenario) {
+      const r = op === 'start' ? await this.api('/devices/demo', { method: 'POST' })
+        : op === 'scenario' ? await this.api('/devices/demo/scenario', { method: 'POST', body: { scenario } })
+          : await this.api('/devices/' + encodeURIComponent((this.demo && this.demo.gateway_id) || 'esp32-sim'), { method: 'DELETE' });
+      await this.loadDemo(); this.refetch();
+      return r;
     }
     async putConfig(key, value) { return this.api('/config/' + key, { method: 'PUT', body: value }); }
     setScenario() { /* simulation only */ }

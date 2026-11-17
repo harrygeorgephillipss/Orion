@@ -206,7 +206,7 @@ class Sim:
                     await client.publish(f"{self.base}/gsm", json.dumps({"seq": self.nxt(), "module": {"id": a.gsm, "registered": gsm_ok, "csq": 17 if gsm_ok else 99, "operator": "Simulated 2G" if gsm_ok else None, "sim": "READY"}, "attempts": attempts}), qos=1)
                     await asyncio.sleep(a.interval)
 
-            await asyncio.gather(listen(), stdin(), loop_())
+            await asyncio.gather(listen(), loop_(), *([stdin()] if getattr(a, "interactive", True) else []))
 
 
 def main() -> None:

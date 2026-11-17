@@ -442,6 +442,18 @@ details.more>summary::-webkit-details-marker{display:none}
 .row-btns input{flex:1;min-width:0;width:auto}
 .tbl select{width:auto;min-width:104px;padding:6px 8px}.tbl input[type=checkbox]{width:auto}.tbl td .btn{white-space:nowrap}
 
+/* Home: connect guide + simulated-home controls; room for the floating Aura button */
+#view{padding-bottom:84px}
+.connect .steps{margin:4px 0 14px;padding-left:22px;display:grid;gap:10px}
+.connect .steps li>b{display:block}.connect .steps li span{color:var(--muted);font-size:.92em}
+.connect .row-btns{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}
+.sim-ctl{display:grid;gap:10px;margin-bottom:14px;border:1px dashed var(--warn,#d9a441)}
+.sim-ctl .hint{display:block}.seg.wrap{flex-wrap:wrap}
+.tiles > .connect{grid-column:1/-1}
+.connect .steps li{display:list-item}
+.connect .sec-h{flex-wrap:wrap;gap:4px 12px}
+.sim-ctl .lnk{justify-self:start}
+
 </style>
 </head>
 <body>
@@ -1543,7 +1555,7 @@ ORION.setupCode = {
       await this._afterAuth();
     }
     async _afterAuth() {
-      await Promise.all([this._loadConfig(), this.refetch(), this._loadAura()]);
+      await Promise.all([this._loadConfig(), this.refetch(), this._loadAura(), this.loadDemo()]);
       this._openWs();
       if (ORION.native && ORION.native.isNative && !this._nativeWired) {
         this._nativeWired = true;
@@ -1758,6 +1770,15 @@ ORION.setupCode = {
         if (!r.ok) { const j = await r.json().catch(() => ({})); return { ok: false, code: (j.detail && j.detail.code) || String(r.status) }; }
         return { ok: true, blob: await r.blob() };
       } catch (e) { return { ok: false, code: 'network' }; }
+    }
+    /* Simulated home on the server (try ORION without hardware; everything it sends is labelled simulated). */
+    async loadDemo() { const r = await this.api('/devices/demo'); this.demo = r.ok ? r.data : null; return this.demo; }
+    async demoAction(op, scenario) {
+      const r = op === 'start' ? await this.api('/devices/demo', { method: 'POST' })
+        : op === 'scenario' ? await this.api('/devices/demo/scenario', { method: 'POST', body: { scenario } })
+          : await this.api('/devices/' + encodeURIComponent((this.demo && this.demo.gateway_id) || 'esp32-sim'), { method: 'DELETE' });
+      await this.loadDemo(); this.refetch();
+      return r;
     }
     async putConfig(key, value) { return this.api('/config/' + key, { method: 'PUT', body: value }); }
     setScenario() { /* simulation only */ }
@@ -3772,11 +3793,34 @@ ORION.setupCode = {
     </ul>`;
   }
 
+  /* ---------- getting connected: real ESP32, or the server's simulated home ---------- */
+  function connectCard() {
+    const admin = A().isAdmin();
+    return `<section class="card connect"><div class="sec-h"><h2>Connect your ORION hardware</h2><span class="hint">Readings appear here as soon as the ESP32 sends them</span></div>
+      <ol class="steps">
+        <li><b>Register the ESP32</b><span>Settings → Registered devices. You get a one-time setup code.</span></li>
+        <li><b>Put the ESP32 in setup mode</b><span>First start, or hold its BOOT button for 5 seconds. It opens a Wi-Fi called <b>ORION-Setup-…</b> (password <b>orion-setup</b>).</span></li>
+        <li><b>Join that Wi-Fi with your phone</b><span>A page opens: choose your home Wi-Fi and paste the setup code.</span></li>
+        <li><b>Done</b><span>The ESP32 connects to this server and the UNO's sensors show up here live.</span></li>
+      </ol>
+      <div class="row-btns">${admin ? `<button class="btn" data-action="connect-esp">Register my ESP32</button>${A().source.demo && A().source.demo.running ? '' : '<button class="btn ghost" data-action="demo-start">Start a simulated home</button>'}` : '<span class="hint">Ask the home’s owner or an admin to register the ESP32.</span>'}</div>
+      <p class="hint">No hardware yet? The simulated home runs on your server and sends realistic readings through the same path the ESP32 will use. Everything it sends is labelled “simulated”.</p></section>`;
+  }
+  const DEMO_SCN = [['normal', 'Normal'], ['smoke_warning', 'Smoke'], ['smoke_critical', 'Heavy smoke'], ['flame', 'Flame'], ['water', 'Water leak'], ['dht_fault', 'Sensor fault'], ['uno_offline', 'UNO offline'], ['gsm_outage', 'No GSM signal']];
+  function demoBar() {
+    const d = A().mode === 'live' && A().source.demo;
+    if (!d || !d.running) return '';
+    const owner = A().user && A().user.role === 'owner';
+    return `<section class="card sim-ctl" aria-label="Simulated home controls"><div><b>Simulated home is running</b><span class="hint">Readings from <b>ESP32 (simulated)</b> are invented test data. Try what happens in an emergency:</span></div>
+      <div class="seg wrap">${DEMO_SCN.map(([k, l]) => `<button class="seg-b${d.scenario === k ? ' on' : ''}" data-action="demo-scn" data-s="${k}">${esc(l)}</button>`).join('')}</div>
+      ${owner ? '<button class="lnk" data-action="demo-stop">Remove the simulated home</button>' : ''}</section>`;
+  }
+
   /* ================= Home ================= */
   const home = {
     title: 'Home',
     mount(el) {
-      el.innerHTML = `<div id="h-status"></div><div id="h-alerts" class="alerts"></div>
+      el.innerHTML = `<div id="h-status"></div><div id="h-demo"></div><div id="h-alerts" class="alerts"></div>
         <div class="sec-h"><h2>Sensors</h2><span class="hint">Tap a sensor for details</span></div><div id="h-tiles" class="tiles"></div>
         <div class="two">
           <section class="card"><div class="sec-h"><h2>Devices</h2><a class="lnk" href="#devices">All devices</a></div><div id="h-dev"></div></section>
@@ -3787,12 +3831,13 @@ ORION.setupCode = {
     update(el) {
       const { snap, ev } = A();
       const g = C.guard(ev, 5);
-      if (g) { set(el, '#h-status', ev && ev.system !== 'LOADING' ? statusCard(ev, snap) : ''); set(el, '#h-tiles', g); ['#h-alerts', '#h-dev', '#h-conn'].forEach((s) => set(el, s, '')); return; }
+      set(el, '#h-demo', demoBar());
+      if (g) { set(el, '#h-status', ev && ev.system !== 'LOADING' ? statusCard(ev, snap) : ''); set(el, '#h-tiles', ev && ev.noData && A().mode === 'live' ? connectCard() : g); ['#h-alerts', '#h-dev', '#h-conn'].forEach((s) => set(el, s, '')); return; }
       set(el, '#h-status', statusCard(ev, snap));
       const act = snap.incidents.filter((i) => i.state !== 'cleared').sort((a, b) => rank(b) - rank(a) || b.opened_at - a.opened_at);
       set(el, '#h-alerts', act.map(alertCard).join(''));
       const tiles = tilesOf(snap);
-      set(el, '#h-tiles', tiles.length ? tiles.map((t) => tile(t, snap, ev)).join('') : C.statePanel('empty', 'No sensors registered', 'Register a controller and its sensors to see readings here.'));
+      set(el, '#h-tiles', tiles.length ? tiles.map((t) => tile(t, snap, ev)).join('') : A().mode === 'live' ? connectCard() : C.statePanel('empty', 'No sensors registered', 'Register a controller and its sensors to see readings here.'));
       set(el, '#h-dev', devicesCompact(snap));
       set(el, '#h-conn', connCompact(snap, ev));
     },
@@ -4377,6 +4422,18 @@ ORION.setupCode = {
       U.store.set(ORION.sources.LiveSource.SERVER_KEY, v.replace(/\/+$/, ''));
       app.setSource('live'); app.mountView(); app.toast(v ? 'Server address saved.' : 'Using this page’s own server.');
     } else if (a === 'cmd') app.confirmCommand(t.dataset.act);
+    else if (a === 'connect-esp') {
+      location.hash = 'config';
+      setTimeout(() => { const f = document.querySelector('form[data-la="register"]'); if (f) { f.closest('details').open = true; f.scrollIntoView({ block: 'center' }); const i = f.querySelector('input'); if (i) i.focus(); } }, 400);
+    } else if (a === 'demo-start' || a === 'demo-scn' || a === 'demo-stop') {
+      const op = { 'demo-start': 'start', 'demo-scn': 'scenario', 'demo-stop': 'stop' }[a];
+      const go = () => { t.disabled = true; app.source.demoAction(op, t.dataset.s).then((r) => {
+        app.toast(r.ok ? { start: 'Simulated home started — readings arrive within a few seconds.', scenario: 'Scenario changed. The simulated sensors react within a few seconds.', stop: 'Simulated home removed.' }[op] : 'Couldn’t do that: ' + r.error, r.ok ? '' : 'bad');
+        app.mountView();
+      }); };
+      if (op === 'stop') confirmBox({ title: 'Remove the simulated home?', confirm: 'Remove', body: '<p>This deletes the simulated ESP32, UNO and sensors. Their history stays in the database, labelled simulated.</p>', onConfirm: go });
+      else go();
+    }
     else if (a === 'aura-open') { if (panelOpen()) closePanel(); else openPanel(); }
     else if (a === 'aura-close') closePanel();
     else if (a === 'theme') { document.body.dataset.theme = t.dataset.t; U.store.set('orion.theme', t.dataset.t); app.mountView(); }

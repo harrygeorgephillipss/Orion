@@ -6,6 +6,7 @@ COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ .
 COPY frontend/index.html /srv/orion/frontend/index.html
+COPY hardware/communication/sim_device.py /srv/orion/sim/sim_device.py
 RUN useradd --system --uid 10001 orion && chown -R orion /srv/orion
 USER orion
 ENV ORION_FRONTEND_DIR=/srv/orion/frontend

@@ -14,7 +14,7 @@ from ..config import get_settings
 from ..deps import client_ip, current_user, db_session, require_role
 from ..models import Device, DeviceKind, GsmModule, Role, Sensor, User
 from ..security import new_device_secret
-from ..services import broker_users
+from ..services import broker_users, demo
 from ..services.snapshot import device_dict, sensor_dict
 
 router = APIRouter(prefix="/devices", tags=["devices"])
@@ -124,6 +124,40 @@ async def rotate_secret(device_id: str, request: Request, actor: User = Depends(
     return await _setup_info(db, gw, secret) | {"gateway_id": gw.id, "broker_account_created": added, "mqtt": {"username": gw.id, "password": secret}}
 
 
+class ScenarioIn(BaseModel):
+    scenario: str = Field(max_length=40)
+
+
+@router.get("/demo")
+async def demo_status(_: User = Depends(current_user)) -> dict:
+    """The simulated home (try ORION without hardware)."""
+    return {"running": demo.running(), "scenario": demo.scenario(), "scenarios": demo.scenarios(), "gateway_id": demo.GATEWAY}
+
+
+@router.post("/demo", status_code=201)
+async def demo_start(request: Request, actor: User = Depends(require_role(Role.admin)), db: AsyncSession = Depends(db_session)) -> dict:
+    if await db.get(Device, demo.GATEWAY):
+        if demo.running():
+            raise HTTPException(409, "The simulated home is already running")
+        await demo.resume()
+    else:
+        out = await register_gateway(GatewayIn(**demo.SPEC), request, actor, db)
+        demo.start(out["mqtt"]["password"])
+    return {"running": True, "gateway_id": demo.GATEWAY}
+
+
+@router.post("/demo/scenario")
+async def demo_scenario(body: ScenarioIn, request: Request, actor: User = Depends(require_role(Role.member)), db: AsyncSession = Depends(db_session)) -> dict:
+    if not demo.running():
+        raise HTTPException(404, "The simulated home is not running")
+    if body.scenario not in demo.scenarios():
+        raise HTTPException(422, "Unknown scenario")
+    demo.set_scenario(body.scenario)
+    audit(db, "user", actor.id, "demo.scenario", demo.GATEWAY, {"scenario": body.scenario}, client_ip(request))
+    await db.commit()
+    return {"running": True, "scenario": body.scenario}
+
+
 @router.delete("/{device_id}")
 async def delete_device(device_id: str, request: Request, actor: User = Depends(require_role(Role.owner)), db: AsyncSession = Depends(db_session)) -> dict:
     d = await db.get(Device, device_id)
@@ -137,4 +171,6 @@ async def delete_device(device_id: str, request: Request, actor: User = Depends(
     await db.commit()
     if d.kind == DeviceKind.gateway:
         broker_users.remove(device_id)
+    if device_id == demo.GATEWAY:
+        demo.stop()
     return {"ok": True}

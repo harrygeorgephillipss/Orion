@@ -72,7 +72,16 @@ async def lifespan(app: FastAPI):
     tasks = [asyncio.create_task(monitor(), name="monitor"), asyncio.create_task(dispatcher.run(), name="push")]
     if st.mqtt_enabled:
         tasks.append(asyncio.create_task(mqtt.run(), name="mqtt"))
+        from .services import demo
+
+        try:
+            await demo.resume()
+        except Exception:  # noqa: BLE001 - the simulated home is optional
+            logging.getLogger("orion.demo").exception("could not resume the simulated home")
     yield
+    from .services import demo
+
+    demo.stop()
     for t in tasks:
         t.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
