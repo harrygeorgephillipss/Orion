@@ -28,6 +28,12 @@ Any provider with a plain Ubuntu server works, for example Hetzner Cloud, Digita
 
 The backend's Python packages all have ready-made Arm (aarch64) builds, so Ampere works.
 
+### Google Cloud in one command
+
+In the console open **Cloud Shell** (`>_`, top right) in a project with billing, then run
+`curl -fsSLo gcp.sh https://raw.githubusercontent.com/harrygeorgephillipss/Orion/dev/scripts/cloud/gcp-create.sh && bash gcp.sh`.
+It creates the e2-micro VM, static IP and firewall rule, optionally a restricted voice API key, and runs the installer.
+
 ## 2. Optional: your own name
 
 The installer can use a free automatic name, `<ip-with-dashes>.sslip.io`. A name you control is more robust:
