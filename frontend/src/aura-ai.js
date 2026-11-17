@@ -427,7 +427,7 @@
       } else if (e.type === 'action' && e.kind === 'proposal') { app.confirmProposal(e); }
       else if (e.type === 'done') { app.ui.auraConv = e.conversation_id; if (e.text && !full) full = e.text; }
       else if (e.type === 'unavailable') { app.ui.auraConv = e.conversation_id; err = { code: 'capability_disabled', text: full }; cap.serverBlocked = true; }
-      else if (e.type === 'error') { err = { code: e.code === 'rate_limited' ? 'rate_limited' : e.code === 'refused' ? 'refused' : 'upstream_error', text: full }; }
+      else if (e.type === 'error') { err = { code: e.code === 'rate_limited' ? 'rate_limited' : e.code === 'refused' ? 'refused' : 'upstream_error', text: full, detail: e.code === 'auth' ? 'The server’s Anthropic API key was rejected. The owner can fix it with scripts/cloud/set-keys.sh.' : e.code === 'connection' ? 'The ORION server cannot reach Anthropic right now.' : e.message || '' }; }
     }, opts.signal);
     if (err && !full.trim()) throw err;
     return { text: full, truncated: !!(err && err.code === 'truncated') };

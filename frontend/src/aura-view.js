@@ -151,7 +151,7 @@
       else if (code === 'tools_unavailable') { AI.cap.tools = false; retry = true; if (S) S.cancel(); msg.streamed = false; }
       else if (['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed'].includes(code)) {
         AI.cap.aiBlocked = true; ctl = null; renderChrome(); return basic(msg, idx, u.auraMsgs[idx - 1].text);
-      } else { msg.status = 'error'; msg.err = AI.ERR[code] || AI.ERR.upstream_error; if (code === 'refused') msg.text = ''; }
+      } else { msg.status = 'error'; msg.err = (code === 'upstream_error' && e && e.detail) || AI.ERR[code] || AI.ERR.upstream_error; if (code === 'refused') msg.text = ''; }
     }
     clearTimeout(hintT); msg.waitHint = false;
     ctl = null;
