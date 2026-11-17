@@ -59,22 +59,37 @@ class TTS(Protocol):
 
 
 class _GoogleAuth:
-    """API key (simplest) or service-account OAuth token, refreshed automatically."""
+    """Google credentials, in order: API key; service-account JSON file; or (VOICE_GOOGLE_AUTH=metadata) the identity
+    of the Google Cloud VM the server runs on - no key stored anywhere. Tokens are refreshed automatically."""
+
+    META = "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token"
 
     def __init__(self, http: httpx.AsyncClient) -> None:
         self.http = http
         self.key = os.environ.get("GOOGLE_CLOUD_API_KEY", "")
         f = os.environ.get("VOICE_GOOGLE_SERVICE_ACCOUNT_FILE", "")
         self.sa = json.loads(Path(f).read_text()) if f and Path(f).is_file() else None
+        self.meta = os.environ.get("VOICE_GOOGLE_AUTH", "").lower() == "metadata"
         self._tok, self._exp = None, 0.0
 
     @property
     def configured(self) -> bool:
-        return bool(self.key or self.sa)
+        return bool(self.key or self.sa or self.meta)
 
     async def headers(self) -> dict:
         if self.key:
             return {"X-Goog-Api-Key": self.key}
+        if self.meta and not self.sa:
+            if not self._tok or time.time() > self._exp - 60:
+                try:
+                    r = await self.http.get(self.META, headers={"Metadata-Flavor": "Google"})
+                except httpx.HTTPError as e:
+                    raise VoiceError("auth", "This server is not on a Google Cloud VM (no metadata server)", 502) from e
+                if r.status_code != 200:
+                    raise VoiceError("auth", f"Google Cloud VM identity unavailable ({r.status_code})", 502)
+                j = r.json()
+                self._tok, self._exp = j["access_token"], time.time() + int(j.get("expires_in", 300))
+            return {"Authorization": f"Bearer {self._tok}"}
         if not self.sa:
             raise VoiceError("not_configured", "No Google credentials on the server", 503)
         if not self._tok or time.time() > self._exp - 60:

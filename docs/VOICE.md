@@ -37,7 +37,12 @@ own voice. Voice choice (per language) and speaking speed (0.5–2×) are in Aur
 
 1. In Google Cloud: create a project, **enable billing**, enable *Cloud Speech-to-Text API* and
    *Cloud Text-to-Speech API*.
-2. Credentials, either:
+2. Credentials, one of:
+   - **On a Google Cloud VM (recommended, no key):** give the VM *Allow full access to all Cloud APIs*
+     (VM → Stop → Edit → Access scopes → Save → Start), then run
+     `sudo bash /opt/orion/scripts/cloud/enable-google-voice.sh` — it sets `VOICE_GOOGLE_AUTH=metadata`, restarts
+     the backend and tests both services. Google's Speech-to-Text documentation describes account credentials
+     (not API keys) for this API, so this is the most reliable option there.
    - an API key restricted to those two APIs → `GOOGLE_CLOUD_API_KEY`, or
    - a service account with access to them → save its JSON **outside the repository** and set
      `VOICE_GOOGLE_SERVICE_ACCOUNT_FILE` (with Docker, mount it read-only into the backend container).

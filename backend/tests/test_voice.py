@@ -84,3 +84,23 @@ async def test_mock_voice_end_to_end_and_limits(client, auth, mock_voice):
     assert (await client.post("/api/v1/aura/voice/speak", json={"text": "x", "voice": "a b<script>"}, headers=auth["viewer"])).status_code == 422
     codes = [(await client.post("/api/v1/aura/voice/transcribe", content=WEBM + b"TEXT:x", headers=h)).status_code for _ in range(32)]
     assert 429 in codes
+
+
+async def test_google_vm_identity(monkeypatch):
+    """On a Google Cloud VM: token from the metadata server, sent as a Bearer token; no key involved."""
+    monkeypatch.delenv("GOOGLE_CLOUD_API_KEY", raising=False)
+    monkeypatch.setenv("VOICE_GOOGLE_AUTH", "metadata")
+    calls = []
+
+    def h(req: httpx.Request) -> httpx.Response:
+        calls.append(str(req.url))
+        if req.url.host == "169.254.169.254":
+            assert req.headers["metadata-flavor"] == "Google"
+            return httpx.Response(200, json={"access_token": "vm-token", "expires_in": 3599})
+        assert req.headers["authorization"] == "Bearer vm-token" and "x-goog-api-key" not in req.headers
+        return httpx.Response(200, json={"audioContent": base64.b64encode(b"ID3x").decode()})
+    tts = V.GoogleTTS(httpx.MockTransport(h))
+    assert tts.auth.configured
+    await tts.synthesize("hello", "en", "", 1.0)
+    await tts.synthesize("again", "en", "", 1.0)
+    assert sum("169.254.169.254" in c for c in calls) == 1  # token reused until it expires
