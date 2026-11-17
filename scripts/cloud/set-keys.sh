@@ -35,7 +35,7 @@ cd "$DIR"
 docker compose --profile https -f deployment/docker-compose.yml --env-file .env up -d backend >/dev/null
 echo "Restarted the backend. Checking Aura in a few seconds..."
 sleep 8
-docker compose -f deployment/docker-compose.yml exec -T backend python - <<'PY'
+docker compose -f deployment/docker-compose.yml --env-file .env exec -T backend python - <<'PY'
 from app.aura.providers import get_provider
 from app.aura import voice
 p = get_provider()
