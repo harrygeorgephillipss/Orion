@@ -151,6 +151,12 @@
       else if (code === 'tools_unavailable') { AI.cap.tools = false; retry = true; if (S) S.cancel(); msg.streamed = false; }
       else if (['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed'].includes(code)) {
         AI.cap.aiBlocked = true; ctl = null; renderChrome(); return basic(msg, idx, u.auraMsgs[idx - 1].text);
+      } else if ((code === 'upstream_error' || code === 'rate_limited') && u.auraMsgs[idx - 1]) {
+        // Claude unreachable (bad key, no credit, network…): answer from the built-in offline mode with the same real
+        // readings, so Aura always answers; say why in a note (not spoken).
+        AI.cap.lastError = code; const why = (e && e.detail) || AI.ERR[code];
+        const pre = msg.text; basic(msg, idx, u.auraMsgs[idx - 1].text); if (pre) msg.text = pre + '\n\n' + msg.text;
+        msg.text += '\n\n(Claude is unavailable — ' + why + ' This answer is from Aura’s built-in offline mode.)'; renderMsg(idx); save(); return;
       } else { msg.status = 'error'; msg.err = (code === 'upstream_error' && e && e.detail) || AI.ERR[code] || AI.ERR.upstream_error; if (code === 'refused') msg.text = ''; }
     }
     clearTimeout(hintT); msg.waitHint = false;
